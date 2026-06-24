@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+.bg-stripe-green {
+  background: repeating-linear-gradient(45deg, #10b981, #10b981 10px, #94a3b8 10px, #94a3b8 20px);
+}
+.bg-stripe-red {
+  background: repeating-linear-gradient(45deg, #f43f5e, #f43f5e 10px, #94a3b8 10px, #94a3b8 20px);
+}
+.bg-stripe-blue {
+  background: repeating-linear-gradient(45deg, #0ea5e9, #0ea5e9 10px, #94a3b8 10px, #94a3b8 20px);
+}
+.bg-stripe-yellow {
+  background: repeating-linear-gradient(45deg, #fbbf24, #fbbf24 10px, #94a3b8 10px, #94a3b8 20px);
+}
+.bg-stripe-purple {
+  background: repeating-linear-gradient(45deg, #a855f7, #a855f7 10px, #94a3b8 10px, #94a3b8 20px);
+}
+.bg-stripe-gray {
+  background: repeating-linear-gradient(45deg, #94a3b8, #94a3b8 10px, #64748b 10px, #64748b 20px);
+}
+
+.bg-stripe-risks {
+  background: repeating-linear-gradient(45deg, #94a3b8, #94a3b8 10px, #ffffff 10px, #ffffff 13px);
+}
