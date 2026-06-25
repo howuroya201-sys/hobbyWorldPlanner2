@@ -444,10 +444,11 @@ async function startServer() {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+const FINAL_PORT = process.env.PORT || process.env.AppPort || 3000;
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running at http://localhost:${PORT}`);
-  });
+app.listen(Number(FINAL_PORT), "0.0.0.0", () => {
+  console.log(`Server successfully started on port ${FINAL_PORT}`);
+});
 }
 
 startServer();
