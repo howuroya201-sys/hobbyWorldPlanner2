@@ -15,9 +15,21 @@ async function startServer() {
   app.use(express.json({ limit: '10mb' }));
 
   // Create local storage directory and helper functions
-  const DATA_DIR = path.join(process.cwd(), "data");
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  let DATA_DIR = path.join(process.cwd(), "data");
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.warn(`Failed to create local data directory at ${DATA_DIR}, falling back to /tmp/data:`, err);
+    DATA_DIR = path.join("/tmp", "data");
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+    } catch (tmpErr) {
+      console.error("Critical: Failed to create fallback /tmp/data directory:", tmpErr);
+    }
   }
 
   const USERS_FILE = path.join(DATA_DIR, "users.json");
