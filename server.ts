@@ -14,6 +14,26 @@ async function startServer() {
 
   app.use(express.json({ limit: '10mb' }));
 
+  // Logging middleware to debug health checks and incoming requests in Timeweb Cloud
+  app.use((req, res, next) => {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] Incoming request: ${req.method} ${req.url} (from ${req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress}) - UA: ${req.headers['user-agent']}`);
+    next();
+  });
+
+  // Dedicated health check endpoints (placed before static files and database APIs to guarantee 200 OK instantly)
+  app.get(["/health", "/healthcheck", "/ping", "/api/health"], (req, res) => {
+    res.status(200).json({
+      status: "ok",
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+      env: {
+        node_env: process.env.NODE_ENV,
+        port: PORT
+      }
+    });
+  });
+
   // Create local storage directory and helper functions
   let DATA_DIR = path.join(process.cwd(), "data");
   try {
