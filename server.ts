@@ -188,50 +188,58 @@ async function startServer() {
     }
   }
 
-  // Database initialization on startup
-  await checkDbConnection();
-  if (isDbConnected) {
-    const pool = getPool();
-    if (pool) {
-      try {
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS projects (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            status TEXT NOT NULL,
-            data JSONB NOT NULL
-          );
-          CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            data JSONB NOT NULL
-          );
-        `);
-        console.log("Database tables initialized successfully.");
-
-        // Check if users table is empty to seed it
-        const userCountResult = await pool.query("SELECT COUNT(*) FROM users");
-        const userCount = parseInt(userCountResult.rows[0].count);
-        
-        if (userCount === 0) {
-          console.log("Seeding initial users to database...");
-          for (const user of INITIAL_USERS) {
-            await pool.query(
-              "INSERT INTO users (id, name, data) VALUES ($1, $2, $3)",
-              [user.id, user.name, JSON.stringify(user)]
+  // Database initialization on startup (asynchronous, non-blocking to pass health checks immediately)
+  async function initializeDbAsync() {
+    console.log("Initializing database connection in the background...");
+    await checkDbConnection();
+    if (isDbConnected) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          await pool.query(`
+            CREATE TABLE IF NOT EXISTS projects (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              status TEXT NOT NULL,
+              data JSONB NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS users (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              data JSONB NOT NULL
+            );
+          `);
+          console.log("Database tables initialized successfully.");
+
+          // Check if users table is empty to seed it
+          const userCountResult = await pool.query("SELECT COUNT(*) FROM users");
+          const userCount = parseInt(userCountResult.rows[0].count);
+          
+          if (userCount === 0) {
+            console.log("Seeding initial users to database...");
+            for (const user of INITIAL_USERS) {
+              await pool.query(
+                "INSERT INTO users (id, name, data) VALUES ($1, $2, $3)",
+                [user.id, user.name, JSON.stringify(user)]
+              );
+            }
+            console.log("Database seeding complete.");
           }
-          console.log("Database seeding complete.");
+        } catch (err) {
+          console.warn("Database initialization query failed. Switching to local fallback:", err);
+          isDbConnected = false;
+          dbConnectionError = err instanceof Error ? err.message : "Schema creation failed";
         }
-      } catch (err) {
-        console.warn("Database initialization query failed. Switching to local fallback:", err);
-        isDbConnected = false;
-        dbConnectionError = err instanceof Error ? err.message : "Schema creation failed";
       }
+    } else {
+      console.log("Starting server with local JSON database fallback.");
     }
-  } else {
-    console.log("Starting server with local JSON database fallback.");
   }
+
+  // Start background database initialization
+  initializeDbAsync().catch((err) => {
+    console.error("Unhandled error during background database initialization:", err);
+  });
 
   // Database status endpoint
   app.get("/api/db-status", async (req, res) => {
