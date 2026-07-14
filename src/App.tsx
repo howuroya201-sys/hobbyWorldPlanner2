@@ -197,6 +197,7 @@ interface Project {
   excludeFromReleases?: boolean;
   releaseYear?: number;
   artDirectorRole?: 'artist' | 'curator';
+  isCollapsed?: boolean;
 }
 
 interface User {
@@ -2084,6 +2085,14 @@ export default function App() {
             setProjects(processedProjects);
             setUsers(data.users);
 
+            const collapsedMap: Record<string, boolean> = {};
+            processedProjects.forEach((p: Project) => {
+              if (p.isCollapsed !== undefined) {
+                collapsedMap[p.id] = p.isCollapsed;
+              }
+            });
+            setCollapsedProjects(collapsedMap);
+
             // Try to sync to server
             for (const p of processedProjects) {
               await syncProjectToServer(p);
@@ -2131,6 +2140,14 @@ export default function App() {
             }))
           })).sort((a: Project, b: Project) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
           setProjects(processedData);
+
+          const collapsedMap: Record<string, boolean> = {};
+          processedData.forEach((p: Project) => {
+            if (p.isCollapsed !== undefined) {
+              collapsedMap[p.id] = p.isCollapsed;
+            }
+          });
+          setCollapsedProjects(collapsedMap);
         }
       })
       .catch(err => console.error('Failed to fetch projects', err));
@@ -2163,6 +2180,27 @@ export default function App() {
   });
   const isAuthenticated = !!userRole;
   const isReadOnly = userRole === 'viewer';
+  
+  const toggleProjectCollapse = (projectId: string, isCollapsed: boolean) => {
+    setCollapsedProjects(prev => ({
+      ...prev,
+      [projectId]: isCollapsed
+    }));
+
+    if (isReadOnly) return;
+
+    setProjects(prevProjects => {
+      const updated = prevProjects.map(p => {
+        if (p.id === projectId) {
+          const updatedProject = { ...p, isCollapsed };
+          syncProjectToServer(updatedProject);
+          return updatedProject;
+        }
+        return p;
+      });
+      return updated;
+    });
+  };
   
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
@@ -3369,10 +3407,7 @@ export default function App() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setCollapsedProjects(prev => ({
-                                  ...prev,
-                                  [project.id]: false
-                                }));
+                                toggleProjectCollapse(project.id, false);
                               }}
                               className="p-1 rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-indigo-600 transition-all flex items-center justify-center flex-shrink-0"
                               title="Развернуть проект"
@@ -3413,10 +3448,7 @@ export default function App() {
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setCollapsedProjects(prev => ({
-                                      ...prev,
-                                      [project.id]: true
-                                    }));
+                                    toggleProjectCollapse(project.id, true);
                                   }}
                                   className="absolute top-2 left-2 p-1.5 rounded-lg bg-white/85 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-sm border border-slate-200/50 opacity-0 group-hover:opacity-100 scale-100 transition-all flex items-center justify-center z-10"
                                   title="Свернуть проект"
@@ -3450,10 +3482,7 @@ export default function App() {
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      setCollapsedProjects(prev => ({
-                                        ...prev,
-                                        [project.id]: true
-                                      }));
+                                      toggleProjectCollapse(project.id, true);
                                     }}
                                     className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-slate-200 text-slate-400 hover:text-indigo-600 transition-all flex-shrink-0 flex items-center justify-center"
                                     title="Свернуть проект"
