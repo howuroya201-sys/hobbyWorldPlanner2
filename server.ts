@@ -9,6 +9,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
+  console.log("=== Server Starting ===");
+  console.log("Node version:", process.version);
+  console.log("Environment Variables:");
+  Object.keys(process.env).forEach(key => {
+    const isSensitive = key.includes("KEY") || key.includes("PASSWORD") || key.includes("SECRET") || key.includes("TOKEN") || key.includes("URL");
+    console.log(`  ${key}: ${isSensitive ? "[HIDDEN]" : process.env[key]}`);
+  });
+  console.log("=======================");
+
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
@@ -444,11 +453,31 @@ async function startServer() {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
-const FINAL_PORT = process.env.PORT || process.env.AppPort || 3000;
 
-app.listen(Number(FINAL_PORT), "0.0.0.0", () => {
-  console.log(`Server successfully started on port ${FINAL_PORT}`);
-});
+  // Listen on multiple common ports to ensure connectivity in any cloud environment (Timeweb Cloud, etc.)
+  // regardless of port mapping configuration in the hosting panel.
+  const portsToListen = Array.from(new Set([
+    PORT,
+    80,
+    8080,
+    3000
+  ]));
+
+  console.log(`Attempting to start servers on ports: ${portsToListen.join(", ")}`);
+
+  portsToListen.forEach((port) => {
+    try {
+      const server = app.listen(port, "0.0.0.0", () => {
+        console.log(`[SUCCESS] Server is listening on 0.0.0.0:${port}`);
+      });
+      
+      server.on("error", (err: any) => {
+        console.warn(`[WARNING] Could not start server on port ${port}: ${err.message}`);
+      });
+    } catch (err: any) {
+      console.warn(`[ERROR] Exception while starting server on port ${port}:`, err);
+    }
+  });
 }
 
 startServer();

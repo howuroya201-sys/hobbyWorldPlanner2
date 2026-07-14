@@ -7,6 +7,8 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { 
   ChevronLeft, 
   ChevronRight, 
+  ChevronUp,
+  ChevronDown,
   Plus, 
   Settings, 
   Users, 
@@ -23,17 +25,16 @@ import {
   Play,
   Check,
   Activity,
-  CheckCircle2,
   AlertCircle,
   Download,
   Lock,
+  Unlock,
   LogOut,
   Minus,
   SortAsc,
   EyeOff,
   Undo2,
-  ExternalLink,
-  Sparkles
+  ExternalLink
 } from 'lucide-react';
 import { 
   format, 
@@ -58,6 +59,11 @@ import { motion, AnimatePresence } from 'motion/react';
 // --- Types ---
 
 const WEIGHT_OPTIONS: Array<number | string> = [1, 2, 3, '3Н', 4, 5, '5Н'];
+
+const MONTH_NAMES = [
+  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+];
 
 const getNumericWeight = (w: number | string | undefined | null): number => {
   if (w === undefined || w === null) return 1;
@@ -658,6 +664,8 @@ const ProjectModal: React.FC<{
   const [excludeFromReleases, setExcludeFromReleases] = useState(initialData?.excludeFromReleases || false);
   const [artDirectorRole, setArtDirectorRole] = useState<'artist' | 'curator'>(initialData?.artDirectorRole || 'artist');
   const [processType, setProcessType] = useState<'sequential' | 'parallel'>('sequential');
+  const [releaseMonth, setReleaseMonth] = useState<number>(new Date().getMonth());
+  const [releaseYear, setReleaseYear] = useState<number>(new Date().getFullYear());
   const [projectStartDate, setProjectStartDate] = useState<string>(
     initialData?.resources[0]?.tasks[0] 
       ? format(new Date(initialData.resources[0].tasks[0].startDate), 'yyyy-MM-dd')
@@ -689,6 +697,39 @@ const ProjectModal: React.FC<{
     });
     return defaultObj;
   });
+
+  const calculateProjectStartDate = (
+    month: number, 
+    year: number, 
+    type: 'sequential' | 'parallel', 
+    currentDurations: Record<string, number>, 
+    currentWeight: number | string
+  ): string => {
+    const targetSalesStart = new Date(year, month, 1);
+    
+    const cDur = currentDurations['Концептирование'] || 2;
+    const dDur = currentDurations['Девелопмент'] || 2;
+    const aDur = currentDurations['Арт Продакшн'] || 2;
+    const rDur = currentDurations['Редактирование'] || 2;
+    const dvDur = currentDurations['Дизайн и вёрстка'] || 2;
+    const prodDur = currentDurations['Производство и старт продаж'] || 2;
+    
+    const numericWeight = getNumericWeight(currentWeight);
+    const riskDuration = numericWeight <= 3 ? 28 : 56;
+    const prodDurationDays = prodDur * 7;
+    
+    let daysBeforeSales = 0;
+    if (type === 'parallel') {
+      const maxParallelWeeks = Math.max(dDur, aDur, rDur, dvDur);
+      daysBeforeSales = (cDur + maxParallelWeeks) * 7 + riskDuration + prodDurationDays;
+    } else {
+      const endOffset = cDur + dDur + aDur + rDur + dvDur;
+      daysBeforeSales = endOffset * 7 + riskDuration + prodDurationDays;
+    }
+    
+    const calculatedStart = addDays(targetSalesStart, -daysBeforeSales);
+    return format(calculatedStart, 'yyyy-MM-dd');
+  };
 
   // Helper to recalculate all dates based on process type
   const recalculateAllDates = (baseStart: string, type: 'sequential' | 'parallel', currentDurations: Record<string, number>) => {
@@ -773,6 +814,18 @@ const ProjectModal: React.FC<{
           ? format(new Date(initialData.resources[0].tasks[0].startDate), 'yyyy-MM-dd')
           : format(new Date(), 'yyyy-MM-dd')
       );
+
+      let initialSalesDate = new Date();
+      const specRes = initialData.resources.find(r => r.role === 'Производство и старт продаж');
+      const salesT = specRes?.tasks.find(t => t.label === 'СТАРТ ПРОДАЖ');
+      if (salesT) {
+        initialSalesDate = new Date(salesT.startDate);
+      } else {
+        initialSalesDate = getProjectReleaseDate(initialData);
+      }
+      setReleaseMonth(initialSalesDate.getMonth());
+      setReleaseYear(initialSalesDate.getFullYear());
+
       setAssignments(initialData.resources.reduce((acc, r) => {
         if (!r.isSpecialRow) acc[r.role] = r.name;
         return acc;
@@ -786,13 +839,18 @@ const ProjectModal: React.FC<{
       setShouldRegenerateTasks(true);
       setArtDirectorRole('artist');
       setProcessType('sequential');
-      const startStr = format(new Date(), 'yyyy-MM-dd');
-      setProjectStartDate(startStr);
+      
+      const today = new Date();
+      setReleaseMonth(today.getMonth());
+      setReleaseYear(today.getFullYear());
       setAssignments(DEFAULT_STAGES.reduce((acc, stage) => ({ ...acc, [stage]: '' }), {}));
       
       const newDurations = getRegulatoryDurationsForWeight(1);
       setDurations(newDurations);
-      recalculateAllDates(startStr, 'sequential', newDurations);
+      
+      const calculatedStart = calculateProjectStartDate(today.getMonth(), today.getFullYear(), 'sequential', newDurations, 1);
+      setProjectStartDate(calculatedStart);
+      recalculateAllDates(calculatedStart, 'sequential', newDurations);
     }
   }, [initialData, isOpen]);
 
@@ -801,9 +859,11 @@ const ProjectModal: React.FC<{
     if (!initialData && isOpen) {
       const regDurations = getRegulatoryDurationsForWeight(weight);
       setDurations(regDurations);
-      recalculateAllDates(projectStartDate, processType, regDurations);
+      const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, regDurations, weight);
+      setProjectStartDate(startStr);
+      recalculateAllDates(startStr, processType, regDurations);
     }
-  }, [weight, isOpen, initialData]);
+  }, [weight, isOpen, initialData, releaseMonth, releaseYear, processType]);
 
   const getFilteredUsers = (stage: string) => {
     const requiredRole = STAGE_TO_ROLE[stage];
@@ -1046,20 +1106,39 @@ const ProjectModal: React.FC<{
                     </select>
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Дата старта проекта</label>
-                    <input 
-                      type="date"
-                      className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500"
-                      value={projectStartDate}
-                      onChange={(e) => {
-                        const newStart = e.target.value;
-                        setProjectStartDate(newStart);
-                        // Shift all stage dates by the same delta if sequential?
-                        // Or just recalculate based on process type?
-                        // If user manual shifted, they might want to move EVERYTHING.
-                        recalculateAllDates(newStart, processType, durations);
-                      }}
-                    />
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Месяц и год выхода проекта</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 font-bold text-slate-700 cursor-pointer text-xs"
+                        value={releaseMonth}
+                        onChange={(e) => {
+                          const newMonth = Number(e.target.value);
+                          setReleaseMonth(newMonth);
+                          const startStr = calculateProjectStartDate(newMonth, releaseYear, processType, durations, weight);
+                          setProjectStartDate(startStr);
+                          recalculateAllDates(startStr, processType, durations);
+                        }}
+                      >
+                        {MONTH_NAMES.map((name, idx) => (
+                          <option key={idx} value={idx}>{name}</option>
+                        ))}
+                      </select>
+                      <select
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 font-bold text-slate-700 cursor-pointer text-xs"
+                        value={releaseYear}
+                        onChange={(e) => {
+                          const newYear = Number(e.target.value);
+                          setReleaseYear(newYear);
+                          const startStr = calculateProjectStartDate(releaseMonth, newYear, processType, durations, weight);
+                          setProjectStartDate(startStr);
+                          recalculateAllDates(startStr, processType, durations);
+                        }}
+                      >
+                        {Array.from({ length: 8 }, (_, i) => 2025 + i).map(yr => (
+                          <option key={yr} value={yr}>{yr}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
                 <div>
@@ -1109,11 +1188,13 @@ const ProjectModal: React.FC<{
                 <div>
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Тип процесса</label>
                   <div className="flex p-1 bg-white border border-slate-200 rounded-xl">
-                    <button
+                     <button
                       type="button"
                       onClick={() => {
                         setProcessType('sequential');
-                        recalculateAllDates(projectStartDate, 'sequential', durations);
+                        const startStr = calculateProjectStartDate(releaseMonth, releaseYear, 'sequential', durations, weight);
+                        setProjectStartDate(startStr);
+                        recalculateAllDates(startStr, 'sequential', durations);
                       }}
                       className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
                         processType === 'sequential' 
@@ -1127,7 +1208,9 @@ const ProjectModal: React.FC<{
                       type="button"
                       onClick={() => {
                         setProcessType('parallel');
-                        recalculateAllDates(projectStartDate, 'parallel', durations);
+                        const startStr = calculateProjectStartDate(releaseMonth, releaseYear, 'parallel', durations, weight);
+                        setProjectStartDate(startStr);
+                        recalculateAllDates(startStr, 'parallel', durations);
                       }}
                       className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
                         processType === 'parallel' 
@@ -1294,18 +1377,19 @@ const ProjectModal: React.FC<{
                   </button>
                 )}
               </div>
-              <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-100 max-h-[460px] overflow-y-auto custom-scrollbar">
-                {DEFAULT_STAGES.map(stage => {
+              <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                {DEFAULT_STAGES.map((stage, sIdx) => {
                   const startDate = stageStartDates[stage] || projectStartDate;
                   const durationWeeks = durations[stage] || 2;
                   const endDate = format(addWeeks(new Date(startDate), durationWeeks), 'yyyy-MM-dd');
+                  const isLastStage = sIdx === DEFAULT_STAGES.length - 1;
 
                   return (
-                    <div key={stage} className="space-y-2 pb-4 border-b border-slate-200 last:border-0 last:pb-0">
+                    <div key={stage} className={`space-y-2 pb-4 ${isLastStage ? '' : 'border-b border-slate-200'} last:border-0 last:pb-0`}>
                       <div className="flex justify-between items-center">
                         <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-tight">{stage}</span>
                       </div>
-                      <div className="grid grid-cols-[1.5fr,1.2fr,0.8fr,1.2fr] gap-3 items-end">
+                      <div className="grid grid-cols-[1.8fr,0.8fr,1.2fr] gap-3 items-end">
                         <div className="space-y-1">
                           <label className="text-[9px] font-bold text-slate-400 uppercase">Сотрудник</label>
                           <select 
@@ -1332,21 +1416,6 @@ const ProjectModal: React.FC<{
                           </select>
                         </div>
                         <div className="space-y-1">
-                          <label className="text-[9px] font-bold text-slate-400 uppercase">Старт</label>
-                          <input 
-                            type="date"
-                            className="w-full px-2 py-2 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:border-indigo-500"
-                            value={startDate}
-                            onChange={(e) => {
-                              const newDate = e.target.value;
-                              setStageStartDates(prev => ({ ...prev, [stage]: newDate }));
-                              // If sequential, maybe shift others?
-                              // But the user said "unless changed manually". 
-                              // For simplicity, individual changes only affect that stage unless recalculate buttons are clicked.
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-1">
                           <label className="text-[9px] font-bold text-slate-400 uppercase">Недели</label>
                           <input 
                             type="number"
@@ -1357,9 +1426,9 @@ const ProjectModal: React.FC<{
                               const val = Number(e.target.value);
                               const newDurations = { ...durations, [stage]: val };
                               setDurations(newDurations);
-                              if (processType === 'sequential') {
-                                recalculateAllDates(projectStartDate, 'sequential', newDurations);
-                              }
+                              const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, newDurations, weight);
+                              setProjectStartDate(startStr);
+                              recalculateAllDates(startStr, processType, newDurations);
                             }}
                           />
                         </div>
@@ -1406,16 +1475,7 @@ const ProjectModal: React.FC<{
                   <div className="flex justify-between items-center mb-2">
                     <span className="text-[10px] font-bold text-indigo-700 uppercase">Производство и старт продаж</span>
                   </div>
-                  <div className="grid grid-cols-[1fr,0.8fr,1.2fr] gap-3 items-end">
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-slate-400 uppercase">Старт</label>
-                      <input 
-                        type="date"
-                        className="w-full px-2 py-2 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:border-indigo-500"
-                        value={stageStartDates['Производство и старт продаж'] || projectStartDate}
-                        onChange={(e) => setStageStartDates(prev => ({ ...prev, ['Производство и старт продаж']: e.target.value }))}
-                      />
-                    </div>
+                  <div className="grid grid-cols-[1.2fr,1.8fr] gap-3 items-end">
                     <div className="space-y-1">
                       <label className="text-[9px] font-bold text-slate-400 uppercase">Недели (Прод.)</label>
                       <input 
@@ -1423,7 +1483,14 @@ const ProjectModal: React.FC<{
                         min="1"
                         className="w-full px-2 py-2 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:border-indigo-500"
                         value={durations['Производство и старт продаж']}
-                        onChange={(e) => setDurations(prev => ({ ...prev, ['Производство и старт продаж']: Number(e.target.value) }))}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          const newDurations = { ...durations, ['Производство и старт продаж']: val };
+                          setDurations(newDurations);
+                          const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, newDurations, weight);
+                          setProjectStartDate(startStr);
+                          recalculateAllDates(startStr, processType, newDurations);
+                        }}
                       />
                     </div>
                     <div className="space-y-1 pb-2">
@@ -1831,13 +1898,15 @@ export default function App() {
     }));
   });
   const [users, setUsers] = useState<User[]>(INITIAL_USERS);
-  const [isOptimizing, setIsOptimizing] = useState(false);
-  const [optimizationResult, setOptimizationResult] = useState<{
-    totalCount: number;
-    year: number;
-    conflictsSolved: boolean;
-    improvedDowntime: number;
-  } | null>(null);
+  const [lockedProjects, setLockedProjects] = useState<Record<string, boolean>>({});
+  const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
+  
+  const getProjectRowHeight = (project: Project, isReleasesTab = false) => {
+    if (isReleasesTab) return ROW_HEIGHT + 2;
+    if (collapsedProjects[project.id]) return ROW_HEIGHT + 2;
+    return (project.resources.length * ROW_HEIGHT) + 2;
+  };
+
   const [history, setHistory] = useState<{ projects: Project[]; users: User[] }[]>(() => {
     const saved = localStorage.getItem('hw_planner_history');
     if (saved) {
@@ -2498,380 +2567,7 @@ export default function App() {
     }
   };
 
-  const handleAutoPlan = (targetYear: number) => {
-    if (isReadOnly) return;
 
-    recordAction();
-    setIsOptimizing(true);
-
-    setTimeout(() => {
-      // 1. Get projects for target year
-      const targetProjects = projects.filter(p => !p.isPrototype && (p.releaseYear === targetYear || getProjectReleaseDate(p).getFullYear() === targetYear));
-
-      if (targetProjects.length === 0) {
-        setIsOptimizing(false);
-        setOptimizationResult({
-          totalCount: 0,
-          year: targetYear,
-          conflictsSolved: true,
-          improvedDowntime: 0
-        });
-        return;
-      }
-
-      // 2. Candidate Mondays for each project
-      const projectCandidateMondays: Record<string, Date[]> = {};
-      targetProjects.forEach(p => {
-        const minStart = getEarliestTaskStartDate(p);
-        const releaseDate = getProjectReleaseDate(p);
-        const totalDurationDays = differenceInDays(releaseDate, minStart);
-        
-        const yearStart = new Date(targetYear, 0, 1);
-        const yearEnd = new Date(targetYear, 11, 31);
-        
-        // Allowed start range so release falls in targetYear
-        const rangeStart = new Date(yearStart.getTime() - totalDurationDays * 86400000);
-        const rangeEnd = new Date(yearEnd.getTime() - totalDurationDays * 86400000);
-        
-        let currMon = startOfWeek(rangeStart, { weekStartsOn: 1 });
-        const list: Date[] = [];
-        while (currMon <= rangeEnd) {
-          list.push(new Date(currMon));
-          currMon = addDays(currMon, 7);
-        }
-        if (list.length === 0) {
-          list.push(startOfWeek(minStart, { weekStartsOn: 1 }));
-        }
-        projectCandidateMondays[p.id] = list;
-      });
-
-      // 3. Candidate users per role
-      const candidatesByRole: Record<string, User[]> = {
-        'Концептирование': users.filter(u => u.roles.includes(ROLES.PRODUCER)),
-        'Девелопмент': users.filter(u => u.roles.includes(ROLES.DEVELOPER)),
-        'Арт Продакшн': users.filter(u => u.roles.includes(ROLES.ART_DIRECTOR)),
-        'Редактирование': users.filter(u => u.roles.includes(ROLES.EDITOR)),
-        'Дизайн и вёрстка': users.filter(u => u.roles.includes(ROLES.LAYOUT_ARTIST))
-      };
-
-      // 4. State representation
-      interface PlanState {
-        id: string;
-        baseStart: Date;
-        artDirectorRole: 'artist' | 'curator';
-        assignments: Record<string, string>; // role -> userName
-      }
-
-      // Initial state
-      let currentPlans: PlanState[] = targetProjects.map(p => {
-        const minStart = getEarliestTaskStartDate(p);
-        const currentMon = startOfWeek(minStart, { weekStartsOn: 1 });
-        
-        const asg: Record<string, string> = {};
-        p.resources.forEach(r => {
-          if (r.isSpecialRow) return;
-          // Assign existing user if qualified, else pick a random candidate
-          const candidates = candidatesByRole[r.role] || [];
-          const exists = candidates.find(c => c.name === r.name);
-          if (exists) {
-            asg[r.role] = r.name;
-          } else if (candidates.length > 0) {
-            asg[r.role] = candidates[Math.floor(Math.random() * candidates.length)].name;
-          } else {
-            asg[r.role] = r.name || 'Не назначен';
-          }
-        });
-
-        return {
-          id: p.id,
-          baseStart: currentMon,
-          artDirectorRole: p.artDirectorRole || 'artist',
-          assignments: asg
-        };
-      });
-
-      // Evaluation helper
-      const getScoreAndConflicts = (plans: PlanState[]) => {
-        const projectTasks: Array<{
-          projectId: string;
-          projectWeight: number;
-          projectSegment: string;
-          role: string;
-          user: string;
-          start: Date;
-          end: Date;
-          artRole?: 'artist' | 'curator';
-        }> = [];
-
-        plans.forEach(plan => {
-          const p = targetProjects.find(pro => pro.id === plan.id)!;
-          const originalMin = getEarliestTaskStartDate(p);
-          const diffDays = differenceInDays(plan.baseStart, originalMin);
-
-          p.resources.forEach(r => {
-            if (r.isSpecialRow) return;
-            const userName = plan.assignments[r.role];
-            if (!userName || userName === 'Не назначен') return;
-
-            r.tasks.forEach(t => {
-              const shiftedStart = addDays(new Date(t.startDate), diffDays);
-              const shiftedEnd = addDays(shiftedStart, t.duration);
-              projectTasks.push({
-                projectId: p.id,
-                projectWeight: getNumericWeight(p.weight),
-                projectSegment: p.segment || 'детская',
-                role: r.role,
-                user: userName,
-                start: shiftedStart,
-                end: shiftedEnd,
-                artRole: r.role === 'Арт Продакшн' ? plan.artDirectorRole : undefined
-              });
-            });
-          });
-        });
-
-        // 1. Conflict Evaluation
-        const userEvents: Record<string, Array<{ time: number; type: 'start' | 'end'; task: typeof projectTasks[0] }>> = {};
-        projectTasks.forEach(pt => {
-          if (!userEvents[pt.user]) {
-            userEvents[pt.user] = [];
-          }
-          userEvents[pt.user].push({ time: pt.start.getTime(), type: 'start', task: pt });
-          userEvents[pt.user].push({ time: pt.end.getTime(), type: 'end', task: pt });
-        });
-
-        let conflictPoints = 0;
-
-        Object.keys(userEvents).forEach(usr => {
-          const events = userEvents[usr];
-          events.sort((a, b) => {
-            if (a.time !== b.time) return a.time - b.time;
-            return a.type === 'end' ? -1 : 1;
-          });
-
-          const active: Set<typeof projectTasks[0]> = new Set();
-          for (let i = 0; i < events.length; i++) {
-            const e = events[i];
-            if (e.type === 'start') active.add(e.task);
-            else active.delete(e.task);
-
-            if (active.size <= 1) continue;
-
-            let devs = 0;
-            let layouts = 0;
-            let eds: typeof projectTasks[0][] = [];
-            let arts: typeof projectTasks[0][] = [];
-
-            active.forEach(at => {
-              if (at.role === 'Девелопмент') devs++;
-              if (at.role === 'Дизайн и вёрстка') layouts++;
-              if (at.role === 'Редактирование') eds.push(at);
-              if (at.role === 'Арт Продакшн') arts.push(at);
-            });
-
-            if (devs > 1) conflictPoints += (devs - 1) * 20000;
-            if (layouts > 1) conflictPoints += (layouts - 1) * 20000;
-            
-            if (eds.length > 2) conflictPoints += (eds.length - 2) * 20000;
-            if (eds.length === 2 && (eds[0].projectWeight > 3 || eds[1].projectWeight > 3)) {
-              conflictPoints += 20000;
-            }
-
-            let artists = 0;
-            let curators = 0;
-            arts.forEach(at => {
-              if (at.artRole === 'artist') artists++;
-              else curators++;
-            });
-
-            if (artists > 1) conflictPoints += (artists - 1) * 20000;
-            if (curators > 3) conflictPoints += (curators - 3) * 20000;
-            if (artists === 1 && curators > 1) conflictPoints += (curators - 1) * 20000;
-          }
-        });
-
-        // 2. Month Distribution Variance
-        const mCount = new Array(12).fill(0);
-        const mSegs: Set<string>[] = Array.from({ length: 12 }, () => new Set());
-        
-        plans.forEach(plan => {
-          const p = targetProjects.find(pro => pro.id === plan.id)!;
-          const originalMin = getEarliestTaskStartDate(p);
-          const diffDays = differenceInDays(plan.baseStart, originalMin);
-          const newRelease = addDays(getProjectReleaseDate(p), diffDays);
-          if (newRelease.getFullYear() === targetYear) {
-            const m = newRelease.getMonth();
-            mCount[m]++;
-            mSegs[m].add(p.segment || 'детская');
-          }
-        });
-
-        const ideal = targetProjects.length / 12;
-        let distCost = 0;
-        for (let m = 0; m < 12; m++) {
-          distCost += Math.pow(mCount[m] - ideal, 2) * 1000;
-        }
-
-        // 3. Segment variety per month
-        let segCost = 0;
-        for (let m = 0; m < 12; m++) {
-          const totalInMonth = mCount[m];
-          const uniques = mSegs[m].size;
-          if (totalInMonth > 1) {
-            segCost += (totalInMonth - uniques) * 600;
-          }
-        }
-
-        // 4. User idle weeks (простой)
-        const yearStart = new Date(targetYear, 0, 1);
-        const userWeeks: Record<string, Set<number>> = {};
-        projectTasks.forEach(pt => {
-          const sOffset = differenceInDays(pt.start, yearStart);
-          const eOffset = differenceInDays(pt.end, yearStart);
-          const sW = Math.max(0, Math.floor(sOffset / 7));
-          const eW = Math.min(52, Math.floor(eOffset / 7));
-
-          if (!userWeeks[pt.user]) {
-            userWeeks[pt.user] = new Set();
-          }
-          for (let w = sW; w <= eW; w++) {
-            userWeeks[pt.user].add(w);
-          }
-        });
-
-        let idleWeeks = 0;
-        Object.keys(userWeeks).forEach(usr => {
-          const activeSet = userWeeks[usr];
-          if (activeSet.size === 0) return;
-          const minW = Math.min(...activeSet);
-          const maxW = Math.max(...activeSet);
-          
-          let idles = 0;
-          for (let w = minW; w <= maxW; w++) {
-            if (!activeSet.has(w)) {
-              idles++;
-            }
-          }
-          idleWeeks += idles;
-        });
-        const idleCost = idleWeeks * 250;
-
-        return {
-          score: conflictPoints + distCost + segCost + idleCost,
-          conflictPoints,
-          idleWeeks
-        };
-      };
-
-      // Best tracker
-      let currentScoreObj = getScoreAndConflicts(currentPlans);
-      let bestPlans = currentPlans.map(cp => ({ ...cp, assignments: { ...cp.assignments } }));
-      let bestScoreObj = currentScoreObj;
-
-      // Simulated Annealing
-      let temp = 1000;
-      const coolingRate = 0.9995;
-      const iterations = 15000;
-
-      for (let step = 0; step < iterations; step++) {
-        // Copy state
-        const nextPlans = currentPlans.map(cp => ({ ...cp, assignments: { ...cp.assignments } }));
-        
-        // Mutate one random project
-        const randomProjIndex = Math.floor(Math.random() * nextPlans.length);
-        const activeProjPlan = nextPlans[randomProjIndex];
-        const p = targetProjects[randomProjIndex];
-
-        const mutationType = Math.random();
-        if (mutationType < 0.45) {
-          // 1. Shift start date
-          const mons = projectCandidateMondays[p.id];
-          if (mons && mons.length > 0) {
-            activeProjPlan.baseStart = mons[Math.floor(Math.random() * mons.length)];
-          }
-        } else if (mutationType < 0.85) {
-          // 2. Change dynamic assignment
-          const activeStages = [...DEFAULT_STAGES];
-          const randomStage = activeStages[Math.floor(Math.random() * activeStages.length)];
-          const cands = candidatesByRole[randomStage] || [];
-          if (cands.length > 0) {
-            activeProjPlan.assignments[randomStage] = cands[Math.floor(Math.random() * cands.length)].name;
-          }
-        } else {
-          // 3. Toggle Art Director Role
-          activeProjPlan.artDirectorRole = activeProjPlan.artDirectorRole === 'artist' ? 'curator' : 'artist';
-        }
-
-        const nextScoreObj = getScoreAndConflicts(nextPlans);
-        const delta = nextScoreObj.score - currentScoreObj.score;
-
-        // Acceptance criteria
-        if (delta < 0 || Math.exp(-delta / temp) > Math.random()) {
-          currentPlans = nextPlans;
-          currentScoreObj = nextScoreObj;
-
-          if (currentScoreObj.score < bestScoreObj.score) {
-            bestPlans = currentPlans.map(cp => ({ ...cp, assignments: { ...cp.assignments } }));
-            bestScoreObj = currentScoreObj;
-          }
-        }
-
-        temp *= coolingRate;
-      }
-
-      // Apply best plans found
-      const updatedProjects = projects.map(p => {
-        const plan = bestPlans.find(bp => bp.id === p.id);
-        if (!plan) return p;
-
-        const originalMin = getEarliestTaskStartDate(p);
-        const diffDays = differenceInDays(plan.baseStart, originalMin);
-
-        const updatedResources = p.resources.map(r => {
-          let updatedTasks = r.tasks.map(t => {
-            const newStart = addDays(new Date(t.startDate), diffDays);
-            const newColor = r.role === 'Арт Продакшн' 
-              ? (plan.artDirectorRole === 'artist' ? 'darkred' : 'lightpink') 
-              : t.color;
-            return {
-              ...t,
-              startDate: newStart,
-              color: newColor
-            };
-          });
-
-          return {
-            ...r,
-            name: r.isSpecialRow ? r.name : (plan.assignments[r.role] || r.name),
-            tasks: updatedTasks
-          };
-        });
-
-        const updatedProject: Project = {
-          ...p,
-          artDirectorRole: plan.artDirectorRole,
-          resources: updatedResources
-        };
-
-        const computedYear = getProjectReleaseDate(updatedProject).getFullYear();
-        const projectWithYear = { ...updatedProject, releaseYear: computedYear };
-
-        // Save server side
-        syncProjectToServer(projectWithYear);
-
-        return projectWithYear;
-      });
-
-      setProjects(updatedProjects);
-      setIsOptimizing(false);
-      setOptimizationResult({
-        totalCount: targetProjects.length,
-        year: targetYear,
-        conflictsSolved: bestScoreObj.conflictPoints === 0,
-        improvedDowntime: bestScoreObj.idleWeeks
-      });
-    }, 1200);
-  };
 
   const saveUser = async (userData: User) => {
     if (isReadOnly) return;
@@ -2918,7 +2614,8 @@ export default function App() {
     }
   };
 
-  const scrollToToday = () => {
+  const scrollToToday = (behaviorParam?: ScrollBehavior | any) => {
+    const behavior: ScrollBehavior = (behaviorParam === 'smooth' || behaviorParam === 'auto') ? behaviorParam : 'smooth';
     if (scrollContainerRef.current) {
       const today = new Date();
       if (today >= timelineStart) {
@@ -2926,7 +2623,7 @@ export default function App() {
         if (weeksFromStart < viewportWeeks) {
           scrollContainerRef.current.scrollTo({
             left: weeksFromStart * CELL_WIDTH,
-            behavior: 'smooth'
+            behavior
           });
         }
       }
@@ -2934,8 +2631,20 @@ export default function App() {
   };
 
   useEffect(() => {
-    const timeout = setTimeout(scrollToToday, 500);
-    return () => clearTimeout(timeout);
+    const scrollInstant = () => scrollToToday('auto');
+    scrollInstant();
+    const t1 = setTimeout(scrollInstant, 50);
+    const t2 = setTimeout(scrollInstant, 150);
+    const t3 = setTimeout(scrollInstant, 300);
+    const t4 = setTimeout(scrollInstant, 500);
+    const t5 = setTimeout(() => scrollToToday('smooth'), 800);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      clearTimeout(t4);
+      clearTimeout(t5);
+    };
   }, []);
 
   const weeks = useMemo(() => {
@@ -2985,7 +2694,7 @@ export default function App() {
     }));
   };
 
-  const updateTask = (projectId: string, resourceId: string, taskId: string, updates: Partial<Task>) => {
+  const updateTask = (projectId: string, resourceId: string, taskId: string, updates: Partial<Task>, forceLock = false) => {
     if (isReadOnly) return;
     const project = projects.find(p => p.id === projectId);
     if (!project) return;
@@ -2994,17 +2703,64 @@ export default function App() {
     let taskToUpdate: Task | null = null;
     let resourceToUpdate: Resource | null = null;
 
-    updatedProject.resources = project.resources.map(r => {
-      if (r.id !== resourceId) return r;
-      resourceToUpdate = r;
-      const taskIndex = r.tasks.findIndex(t => t.id === taskId);
-      if (taskIndex === -1) return r;
-      
-      taskToUpdate = { ...r.tasks[taskIndex], ...updates };
-      const newTasks = [...r.tasks];
-      newTasks[taskIndex] = taskToUpdate;
-      return { ...r, tasks: newTasks };
-    });
+    let oldTask: Task | null = null;
+    for (const r of project.resources) {
+      const t = r.tasks.find(tk => tk.id === taskId);
+      if (t) {
+        oldTask = t;
+        break;
+      }
+    }
+
+    const isLocked = forceLock || lockedProjects[projectId];
+
+    if (isLocked && updates.startDate && oldTask) {
+      const oldDate = oldTask.startDate;
+      const newDate = updates.startDate;
+      const daysDiff = differenceInDays(newDate, oldDate);
+
+      if (daysDiff !== 0) {
+        updatedProject.resources = project.resources.map(r => {
+          const newTasks = r.tasks.map(t => {
+            const baseShiftedDate = addDays(t.startDate, daysDiff);
+            if (t.id === taskId) {
+              taskToUpdate = { ...t, ...updates, startDate: baseShiftedDate };
+              return taskToUpdate;
+            } else {
+              return { ...t, startDate: baseShiftedDate };
+            }
+          });
+          if (r.id === resourceId) {
+            resourceToUpdate = r;
+          }
+          return { ...r, tasks: newTasks };
+        });
+      } else {
+        updatedProject.resources = project.resources.map(r => {
+          if (r.id !== resourceId) return r;
+          resourceToUpdate = r;
+          const taskIndex = r.tasks.findIndex(t => t.id === taskId);
+          if (taskIndex === -1) return r;
+          
+          taskToUpdate = { ...r.tasks[taskIndex], ...updates };
+          const newTasks = [...r.tasks];
+          newTasks[taskIndex] = taskToUpdate;
+          return { ...r, tasks: newTasks };
+        });
+      }
+    } else {
+      updatedProject.resources = project.resources.map(r => {
+        if (r.id !== resourceId) return r;
+        resourceToUpdate = r;
+        const taskIndex = r.tasks.findIndex(t => t.id === taskId);
+        if (taskIndex === -1) return r;
+        
+        taskToUpdate = { ...r.tasks[taskIndex], ...updates };
+        const newTasks = [...r.tasks];
+        newTasks[taskIndex] = taskToUpdate;
+        return { ...r, tasks: newTasks };
+      });
+    }
 
     if (!taskToUpdate || !resourceToUpdate) return;
 
@@ -3264,11 +3020,13 @@ export default function App() {
       const projectIndex = sortedProjects.findIndex(p => p.id === freshProject.id);
       
       for (let i = 0; i < projectIndex; i++) {
-        verticalOffset += (sortedProjects[i].resources.length * ROW_HEIGHT);
+        verticalOffset += getProjectRowHeight(sortedProjects[i]);
       }
       
-      const resourceIndex = freshProject.resources.findIndex(r => r.id === freshResource.id);
-      verticalOffset += resourceIndex * ROW_HEIGHT;
+      if (!collapsedProjects[freshProject.id]) {
+        const resourceIndex = freshProject.resources.findIndex(r => r.id === freshResource.id);
+        verticalOffset += resourceIndex * ROW_HEIGHT;
+      }
 
       if (scrollContainerRef.current) {
         const viewportWidth = scrollContainerRef.current.clientWidth;
@@ -3483,21 +3241,7 @@ export default function App() {
             </button>
           )}
 
-          {isProjectTab && activeTab.startsWith('projects_') && !isReadOnly && (
-            <button 
-              onClick={() => {
-                const yearVal = parseInt(activeTab.replace('projects_', ''), 10);
-                if (!isNaN(yearVal)) {
-                  handleAutoPlan(yearVal);
-                }
-              }}
-              className="flex items-center gap-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-4 py-2 rounded-lg text-sm font-semibold transition-all h-[38px] shadow-sm relative overflow-hidden group hover:scale-102 active:scale-98 whitespace-nowrap"
-              title={`Автоматически расположить задачи и назначить исполнителей на ${activeTab.replace('projects_', '')} год без конфликтов`}
-            >
-              <Sparkles size={16} className="text-rose-500 group-hover:scale-110 transition-transform" />
-              <span>Автопланирование {activeTab.replace('projects_', '')}</span>
-            </button>
-          )}
+
 
           {!isReadOnly && (
             <button 
@@ -3568,7 +3312,7 @@ export default function App() {
         <div className="inline-flex min-w-full">
           {/* Static Columns */}
           {(isSidebarVisible || isProjectTab || activeTab === 'users') && (
-            <div className="sticky left-0 z-40 flex bg-white border-r border-slate-200 shadow-xl shadow-slate-200/50 overflow-hidden">
+            <div className="sticky left-0 z-40 flex bg-white border-r border-slate-200 shadow-xl shadow-slate-200/50">
               {isProjectTab && (
                 <div className="w-52 flex-shrink-0 border-r border-slate-100">
                   <div className="h-20 sticky top-0 z-50 flex flex-col justify-end px-3 pb-3 bg-white border-b-2 border-slate-400">
@@ -3600,13 +3344,14 @@ export default function App() {
                   </div>
                   {sortedProjects.map(project => {
                     const isReleasesTab = activeTab === 'releases';
-                    const rowHeight = isReleasesTab ? ROW_HEIGHT + 2 : (project.resources.length * ROW_HEIGHT) + 2;
+                    const isCollapsed = !isReleasesTab && collapsedProjects[project.id];
+                    const rowHeight = getProjectRowHeight(project, isReleasesTab);
                     
                     return (
                       <div 
                         key={project.id} 
                         style={{ height: rowHeight }}
-                        className={`px-3 ${isReleasesTab ? 'py-1' : 'py-3'} border-b-2 border-slate-400 group flex flex-col cursor-pointer transition-all duration-200 overflow-hidden ${
+                        className={`px-3 ${isReleasesTab ? 'py-1' : isCollapsed ? 'py-0 flex items-center justify-between' : 'py-3'} border-b-2 border-slate-400 group flex flex-col cursor-pointer transition-all duration-200 overflow-hidden ${
                           !isReleasesTab && project.resources.reduce((acc, r) => 
                             acc + r.tasks.filter(t => t.status === 'overdue').length, 0
                           ) > 8
@@ -3619,21 +3364,105 @@ export default function App() {
                           setModalMode('edit');
                         }}
                       >
-                        {project.imageUrl && !isReleasesTab && (
-                        <div className="flex-1 min-h-0 mb-2 relative">
-                          <img 
-                            src={project.imageUrl} 
-                            alt={project.name}
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover rounded-xl shadow-sm border border-slate-100 group-hover:shadow-md transition-shadow" 
-                          />
-                          <MoreVertical size={14} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-white drop-shadow-md flex-shrink-0" />
-                        </div>
-                      )}
+                        {isCollapsed ? (
+                          <div className="flex items-center gap-2 w-full h-full min-w-0">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCollapsedProjects(prev => ({
+                                  ...prev,
+                                  [project.id]: false
+                                }));
+                              }}
+                              className="p-1 rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-indigo-600 transition-all flex items-center justify-center flex-shrink-0"
+                              title="Развернуть проект"
+                            >
+                              <ChevronDown size={14} strokeWidth={2.5} />
+                            </button>
+                            <div className="flex flex-col min-w-0 flex-1 justify-center">
+                              <span className="font-bold text-[12px] text-slate-800 truncate group-hover:text-indigo-600 transition-colors leading-tight">{project.name}</span>
+                              {project.segment && (
+                                <span className="text-[8px] font-black text-indigo-500 uppercase tracking-widest leading-none mt-0.5">{project.segment}</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              {project.trackerUrl && (
+                                <a 
+                                  href={project.trackerUrl} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-indigo-600 transition-all"
+                                  title="Открыть в трекере"
+                                >
+                                  <ExternalLink size={12} />
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            {project.imageUrl && !isReleasesTab && (
+                              <div className="flex-1 min-h-0 mb-2 relative">
+                                <img 
+                                  src={project.imageUrl} 
+                                  alt={project.name}
+                                  referrerPolicy="no-referrer"
+                                  className="w-full h-full object-cover rounded-xl shadow-sm border border-slate-100 group-hover:shadow-md transition-shadow" 
+                                />
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setCollapsedProjects(prev => ({
+                                      ...prev,
+                                      [project.id]: true
+                                    }));
+                                  }}
+                                  className="absolute top-2 left-2 p-1.5 rounded-lg bg-white/85 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-sm border border-slate-200/50 opacity-0 group-hover:opacity-100 scale-100 transition-all flex items-center justify-center z-10"
+                                  title="Свернуть проект"
+                                >
+                                  <ChevronUp size={12} strokeWidth={2.5} />
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setLockedProjects(prev => ({
+                                      ...prev,
+                                      [project.id]: !prev[project.id]
+                                    }));
+                                  }}
+                                  className={`absolute top-2 right-2 p-1.5 rounded-lg transition-all flex items-center justify-center ${
+                                    lockedProjects[project.id] 
+                                      ? 'bg-indigo-600 text-white shadow-md border border-indigo-500 scale-110 opacity-100 z-10' 
+                                      : 'bg-white/85 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-sm border border-slate-200/50 opacity-0 group-hover:opacity-100 scale-100 z-10'
+                                  }`}
+                                  title={lockedProjects[project.id] ? "Разгруппировать задачи" : "Группировать задачи (перемещать вместе)"}
+                                >
+                                  {lockedProjects[project.id] ? <Lock size={12} strokeWidth={2.5} /> : <Unlock size={12} strokeWidth={2.5} />}
+                                </button>
+                              </div>
+                            )}
                       <div className="flex flex-col min-w-0 gap-1.5">
                           <div className="flex flex-col gap-0.5">
                             <div className="flex items-start justify-between gap-1">
-                              <span className="font-bold text-[13px] text-slate-800 line-clamp-2 group-hover:text-indigo-600 transition-colors leading-tight">{project.name}</span>
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                {!project.imageUrl && !isReleasesTab && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setCollapsedProjects(prev => ({
+                                        ...prev,
+                                        [project.id]: true
+                                      }));
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-slate-200 text-slate-400 hover:text-indigo-600 transition-all flex-shrink-0 flex items-center justify-center"
+                                    title="Свернуть проект"
+                                  >
+                                    <ChevronUp size={12} strokeWidth={2.5} />
+                                  </button>
+                                )}
+                                <span className="font-bold text-[13px] text-slate-800 line-clamp-2 group-hover:text-indigo-600 transition-colors leading-tight">{project.name}</span>
+                              </div>
                               <div className="flex items-center gap-1">
                                 {project.trackerUrl && (
                                   <a 
@@ -3704,6 +3533,8 @@ export default function App() {
                             </div>
                           );
                         })()}
+                        </>
+                        )}
                       </div>
                     );
                   })}
@@ -3754,10 +3585,10 @@ export default function App() {
               <AnimatePresence initial={false}>
                 {(isSidebarVisible || activeTab === 'users') && (
                   <motion.div 
-                    initial={{ width: 0, opacity: 0 }}
-                    animate={{ width: 'auto', opacity: 1 }}
-                    exit={{ width: 0, opacity: 0 }}
-                    className="flex overflow-hidden"
+                    initial={{ width: 0, opacity: 0, overflow: 'hidden' }}
+                    animate={{ width: 'auto', opacity: 1, transitionEnd: { overflow: 'visible' } }}
+                    exit={{ width: 0, opacity: 0, overflow: 'hidden' }}
+                    className="flex"
                   >
                     {activeTab === 'releases' ? (
                       <div className="w-64 flex-shrink-0">
@@ -3953,12 +3784,14 @@ export default function App() {
                           Команда
                         </div>
                         {sortedProjects.map((project, pIdx) => {
+                          const isCollapsed = collapsedProjects[project.id];
+                          const rowHeight = getProjectRowHeight(project, false);
+                          
                           const projectOverdueCount = project.resources.reduce((acc, r) => 
                             acc + r.tasks.filter(t => t.status === 'overdue').length, 0
                           );
                           const limit = getNumericWeight(project.weight) <= 3 ? 4 : 8;
                           const isOverLimit = projectOverdueCount > limit;
-                          const rowHeight = (project.resources.length * ROW_HEIGHT) + 2;
                           
                           return (
                             <div 
@@ -3966,7 +3799,11 @@ export default function App() {
                               style={{ height: rowHeight }}
                               className={`border-b-2 border-slate-400 overflow-hidden ${isOverLimit ? 'bg-red-50/20' : ''}`}
                             >
-                              {project.resources.map((resource, rIdx) => {
+                              {isCollapsed ? (
+                                <div className="h-full flex items-center px-4 text-[10px] text-slate-400 font-medium italic select-none">
+                                  Проект завершен
+                                </div>
+                              ) : project.resources.map((resource, rIdx) => {
                                 const isNearBottom = pIdx >= sortedProjects.length - 1 || (pIdx >= sortedProjects.length - 2 && rIdx >= project.resources.length - 3);
                                 
                                 return (
@@ -4078,10 +3915,10 @@ export default function App() {
                       <AnimatePresence>
                         {isSidebarVisible && (
                           <motion.div 
-                            initial={{ width: 0, opacity: 0 }}
-                            animate={{ width: 192, opacity: 1 }}
-                            exit={{ width: 0, opacity: 0 }}
-                            className="w-48 flex-shrink-0 border-r border-slate-100 bg-slate-50/30 overflow-hidden"
+                            initial={{ width: 0, opacity: 0, overflow: 'hidden' }}
+                            animate={{ width: 192, opacity: 1, transitionEnd: { overflow: 'visible' } }}
+                            exit={{ width: 0, opacity: 0, overflow: 'hidden' }}
+                            className="w-48 flex-shrink-0 border-r border-slate-100 bg-slate-50/30"
                           >
                             <div className="h-20 sticky top-0 z-50 flex flex-col justify-end px-4 pb-3 bg-white border-b-2 border-slate-400 min-w-[192px]">
                               <div className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-2">Отпуска</div>
@@ -4227,7 +4064,7 @@ export default function App() {
                             isReadOnly={isReadOnly}
                             onUpdate={(updates) => {
                               if (resourceWithRelease) {
-                                updateTask(project.id, resourceWithRelease.id, releaseTask.id, updates);
+                                updateTask(project.id, resourceWithRelease.id, releaseTask.id, updates, true);
                               }
                             }}
                             onDelete={() => {
@@ -4242,12 +4079,14 @@ export default function App() {
                   })
                 ) : isProjectTab ? (
                   sortedProjects.map(project => {
+                    const isCollapsed = collapsedProjects[project.id];
+                    const rowHeight = getProjectRowHeight(project, false);
+
                     const projectOverdueCount = project.resources.reduce((acc, r) => 
                       acc + r.tasks.filter(t => t.status === 'overdue').length, 0
                     );
                     const limit = getNumericWeight(project.weight) <= 3 ? 4 : 8;
                     const isOverLimit = projectOverdueCount > limit;
-                    const rowHeight = (project.resources.length * ROW_HEIGHT) + 2;
 
                     return (
                       <motion.div 
@@ -4257,7 +4096,10 @@ export default function App() {
                         className={`border-b-2 border-slate-400 overflow-hidden ${isOverLimit ? 'bg-red-50/10' : ''}`}
                         transition={{ type: "spring", stiffness: 300, damping: 30 }}
                       >
-                        {project.resources.map(resource => (
+                        {isCollapsed ? (
+                          <div className="h-full flex items-center px-4 text-[10px] text-slate-400 font-semibold uppercase tracking-wider select-none bg-slate-50/50" />
+                        ) : (
+                          project.resources.map(resource => (
                           <div 
                             key={resource.id} 
                             className={`h-12 border-b border-slate-50 last:border-0 relative hover:bg-slate-100/50 transition-colors group ${resource.isSpecialRow ? 'bg-indigo-50/5' : ''} ${isOverLimit ? 'hover:bg-red-50/30' : ''}`}
@@ -4282,7 +4124,8 @@ export default function App() {
                             />
                           ))}
                         </div>
-                      ))}
+                      ))
+                    )}
                     </motion.div>
                   );
                 })
@@ -4363,6 +4206,12 @@ export default function App() {
       <footer className="px-6 py-2 bg-white border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 font-medium">
         <div className="flex items-center gap-4">
           <div className="bg-slate-100 p-0.5 rounded-lg flex shadow-inner">
+            <button 
+              onClick={() => setActiveTab('projects')}
+              className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'projects' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+            >
+              Все проекты
+            </button>
             {projectYears.map(yr => (
               <button 
                 key={yr}
@@ -4538,122 +4387,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {isOptimizing && (
-          <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 border border-slate-100 overflow-hidden relative text-center space-y-6"
-            >
-              <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-rose-500 via-purple-500 to-indigo-600 animate-pulse" />
-              
-              <div className="flex flex-col items-center justify-center">
-                <div className="relative w-20 h-20">
-                  {/* Outer spinning ring */}
-                  <div className="absolute inset-0 border-4 border-indigo-100 rounded-full" />
-                  <div className="absolute inset-0 border-4 border-transparent border-t-indigo-500 border-r-indigo-500 rounded-full animate-spin" />
-                  {/* Inner glowing core */}
-                  <div className="absolute inset-4 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-600 shadow-inner">
-                    <Sparkles size={24} className="animate-pulse" />
-                  </div>
-                </div>
-              </div>
 
-              <div className="space-y-2">
-                <h3 className="text-xl font-black text-slate-800 tracking-tight">Построение оптимального плана</h3>
-                <p className="text-sm text-slate-500 font-medium">Алгоритм Simulated Annealing вычисляет распределение задач без простоев и пересечений...</p>
-              </div>
-
-              <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100/50 space-y-2.5 text-left">
-                <div className="flex items-center gap-2.5 text-xs text-slate-600 font-bold">
-                  <div className="w-2 h-2 rounded-full bg-indigo-500 animate-ping" />
-                  <span>Поиск компромисса распределения...</span>
-                </div>
-                <div className="flex items-center gap-2.5 text-xs text-slate-600 font-bold">
-                  <div className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-                  <span>Проверка лимитов редакторов & верстальщиков...</span>
-                </div>
-                <div className="flex items-center gap-2.5 text-xs text-slate-600 font-bold">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                  <span>Минимизация недельных простоев...</span>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-
-        {optimizationResult && (
-          <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-8 border border-slate-100 overflow-hidden relative space-y-6"
-            >
-              <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-emerald-400 via-teal-500 to-indigo-500" />
-              
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-600 shadow-inner">
-                  <CheckCircle2 size={32} />
-                </div>
-                <div>
-                  <h3 className="text-2xl font-black text-slate-800 tracking-tight">Готово! План построен 🎉</h3>
-                  <p className="text-xs text-slate-500 font-black uppercase tracking-wider">Успешная оптимизация на {optimizationResult.year} год</p>
-                </div>
-              </div>
-
-              <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100/80 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-white p-4 rounded-xl border border-slate-200/60 shadow-sm text-center">
-                    <div className="text-[10px] uppercase font-black tracking-widest text-slate-400">Проектов спланировано</div>
-                    <div className="text-3xl font-black text-indigo-600 mt-1">{optimizationResult.totalCount}</div>
-                  </div>
-                  <div className="bg-white p-4 rounded-xl border border-slate-200/60 shadow-sm text-center">
-                    <div className="text-[10px] uppercase font-black tracking-widest text-slate-400">Конфликтов решено</div>
-                    <div className="text-3xl font-black text-emerald-600 mt-1">Все!</div>
-                  </div>
-                </div>
-
-                <div className="space-y-3 pt-2">
-                  <h4 className="text-[10px] uppercase font-black tracking-widest text-slate-400">Прогресс и соответствие правилам:</h4>
-                  <ul className="space-y-2.5 text-xs font-bold text-slate-700">
-                    <li className="flex items-start gap-2.5">
-                      <span className="text-emerald-500 mt-0.5">✔</span>
-                      <span>Сроки задач сохранены и не разорваны внутри проектов (строгое смещение блоков).</span>
-                    </li>
-                    <li className="flex items-start gap-2.5">
-                      <span className="text-emerald-500 mt-0.5">✔</span>
-                      <span>Занятость полностью урегулирована (верстальщики, девелоперы и редакторы распределены по лимитам).</span>
-                    </li>
-                    <li className="flex items-start gap-2.5">
-                      <span className="text-emerald-500 mt-0.5">✔</span>
-                      <span>Арт-директора сбалансированы как художники (artist) и кураторы (curator) без превышения лимитов.</span>
-                    </li>
-                    <li className="flex items-start gap-2.5">
-                      <span className="text-emerald-500 mt-0.5">✔</span>
-                      <span>Устранена лишняя сегментация в релизах (проекты распределены равномерно с разными сегментами по месяцам).</span>
-                    </li>
-                    <li className="flex items-start gap-2.5">
-                      <span className="text-emerald-500 mt-0.5">✔</span>
-                      <span>Простои сотрудников сведены к минимуму (минимум свободных недель между задачами).</span>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setOptimizationResult(null)}
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg shadow-indigo-100 transition-all text-center active:scale-95 text-sm"
-                >
-                  Посмотреть карту таймлайна
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
