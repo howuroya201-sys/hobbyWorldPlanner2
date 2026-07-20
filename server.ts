@@ -64,6 +64,60 @@ async function startServer() {
   const USERS_FILE = path.join(DATA_DIR, "users.json");
   const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 
+  const getRussianHolidaysForYear = (year: number) => {
+    return [
+      {
+        id: `ru-holiday-${year}-01-01`,
+        startDate: `${year}-01-01`,
+        endDate: `${year}-01-09`,
+        holidayName: 'Новогодние каникулы',
+        isHoliday: true
+      },
+      {
+        id: `ru-holiday-${year}-02-23`,
+        startDate: `${year}-02-23`,
+        endDate: `${year}-02-24`,
+        holidayName: 'День защитника Отечества',
+        isHoliday: true
+      },
+      {
+        id: `ru-holiday-${year}-03-08`,
+        startDate: `${year}-03-08`,
+        endDate: `${year}-03-09`,
+        holidayName: 'Международный женский день',
+        isHoliday: true
+      },
+      {
+        id: `ru-holiday-${year}-05-01`,
+        startDate: `${year}-05-01`,
+        endDate: `${year}-05-02`,
+        holidayName: 'Праздник Весны и Труда',
+        isHoliday: true
+      },
+      {
+        id: `ru-holiday-${year}-05-09`,
+        startDate: `${year}-05-09`,
+        endDate: `${year}-05-10`,
+        holidayName: 'День Победы',
+        isHoliday: true
+      },
+      {
+        id: `ru-holiday-${year}-06-12`,
+        startDate: `${year}-06-12`,
+        endDate: `${year}-06-13`,
+        holidayName: 'День России',
+        isHoliday: true
+      },
+      {
+        id: `ru-holiday-${year}-11-04`,
+        startDate: `${year}-11-04`,
+        endDate: `${year}-11-05`,
+        holidayName: 'День народного единства',
+        isHoliday: true
+      }
+    ];
+  };
+
   const INITIAL_USERS = [
     { id: 'u1', name: 'Владимир Грачев', imageUrl: 'https://i.pravatar.cc/150?u=u1', roles: ['Продюсер'] },
     { id: 'u2', name: 'Матвей Чистяков', imageUrl: 'https://i.pravatar.cc/150?u=u2', roles: ['Девелопер'] },
@@ -72,7 +126,16 @@ async function startServer() {
     { id: 'u5', name: 'Юлия Калиновская', imageUrl: 'https://i.pravatar.cc/150?u=u5', roles: ['Верстальщик'] },
     { id: 'u6', name: 'Артем Шорохов', imageUrl: 'https://i.pravatar.cc/150?u=u6', roles: ['Продюсер', 'Арт-директор'] },
     { id: 'u7', name: 'Сергей Притула', imageUrl: 'https://i.pravatar.cc/150?u=u7', roles: ['Девелопер'] },
-  ];
+  ].map(u => {
+    const holidays: any[] = [];
+    [2025, 2026, 2027, 2028].forEach(year => {
+      holidays.push(...getRussianHolidaysForYear(year));
+    });
+    return {
+      ...u,
+      vacations: holidays
+    };
+  });
 
   function readLocalUsers(): any[] {
     if (!fs.existsSync(USERS_FILE)) {

@@ -15,6 +15,7 @@ import {
   Search,
   Layers,
   Cpu,
+  Sparkles,
   Calendar,
   MoreVertical,
   Type,
@@ -193,6 +194,7 @@ interface Project {
   segment?: string;
   resources: Resource[];
   isPrototype?: boolean;
+  isMhi?: boolean;
   sortOrder?: number;
   excludeFromReleases?: boolean;
   releaseYear?: number;
@@ -209,8 +211,64 @@ interface User {
     id: string;
     startDate: string;
     endDate: string;
+    isHoliday?: boolean;
+    holidayName?: string;
   }>;
 }
+
+const getRussianHolidaysForYear = (year: number) => {
+  return [
+    {
+      id: `ru-holiday-${year}-01-01`,
+      startDate: `${year}-01-01`,
+      endDate: `${year}-01-09`,
+      holidayName: 'Новогодние каникулы',
+      isHoliday: true
+    },
+    {
+      id: `ru-holiday-${year}-02-23`,
+      startDate: `${year}-02-23`,
+      endDate: `${year}-02-24`,
+      holidayName: 'День защитника Отечества',
+      isHoliday: true
+    },
+    {
+      id: `ru-holiday-${year}-03-08`,
+      startDate: `${year}-03-08`,
+      endDate: `${year}-03-09`,
+      holidayName: 'Международный женский день',
+      isHoliday: true
+    },
+    {
+      id: `ru-holiday-${year}-05-01`,
+      startDate: `${year}-05-01`,
+      endDate: `${year}-05-02`,
+      holidayName: 'Праздник Весны и Труда',
+      isHoliday: true
+    },
+    {
+      id: `ru-holiday-${year}-05-09`,
+      startDate: `${year}-05-09`,
+      endDate: `${year}-05-10`,
+      holidayName: 'День Победы',
+      isHoliday: true
+    },
+    {
+      id: `ru-holiday-${year}-06-12`,
+      startDate: `${year}-06-12`,
+      endDate: `${year}-06-13`,
+      holidayName: 'День России',
+      isHoliday: true
+    },
+    {
+      id: `ru-holiday-${year}-11-04`,
+      startDate: `${year}-11-04`,
+      endDate: `${year}-11-05`,
+      holidayName: 'День народного единства',
+      isHoliday: true
+    }
+  ];
+};
 
 // --- Constants ---
 
@@ -318,7 +376,16 @@ const INITIAL_USERS: User[] = [
   { id: 'u5', name: 'Юлия Калиновская', imageUrl: 'https://i.pravatar.cc/150?u=u5', roles: [ROLES.LAYOUT_ARTIST] },
   { id: 'u6', name: 'Артем Шорохов', imageUrl: 'https://i.pravatar.cc/150?u=u6', roles: [ROLES.PRODUCER, ROLES.ART_DIRECTOR] },
   { id: 'u7', name: 'Сергей Притула', imageUrl: 'https://i.pravatar.cc/150?u=u7', roles: [ROLES.DEVELOPER] },
-];
+].map(u => {
+  const holidays: any[] = [];
+  [2025, 2026, 2027, 2028].forEach(year => {
+    holidays.push(...getRussianHolidaysForYear(year));
+  });
+  return {
+    ...u,
+    vacations: holidays
+  };
+});
 
 // --- Components ---
 
@@ -576,44 +643,58 @@ const UserModal: React.FC<{
                 </button>
               </div>
               
-              <div className="space-y-2">
-                {vacations && vacations.length > 0 ? (
-                  vacations.map((vacation) => (
-                    <div key={vacation.id} className="flex items-center gap-2 p-3 bg-slate-50 rounded-xl border border-slate-100 group shadow-sm">
-                      <div className="flex-1 grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">С</label>
-                          <input 
-                            type="date"
-                            value={vacation.startDate}
-                            onChange={(e) => updateVacation(vacation.id, 'startDate', e.target.value)}
-                            className="w-full text-[11px] font-bold bg-white border border-slate-200 rounded-lg p-1.5 outline-none focus:border-indigo-400"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">По</label>
-                          <input 
-                            type="date"
-                            value={vacation.endDate}
-                            onChange={(e) => updateVacation(vacation.id, 'endDate', e.target.value)}
-                            className="w-full text-[11px] font-bold bg-white border border-slate-200 rounded-lg p-1.5 outline-none focus:border-indigo-400"
-                          />
-                        </div>
-                      </div>
-                      <button 
-                        type="button"
-                        onClick={() => removeVacation(vacation.id)}
-                        className="p-2 text-slate-300 hover:text-rose-500 transition-colors"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-center py-6 border-2 border-dashed border-slate-100 rounded-2xl">
-                    <p className="text-[11px] font-bold text-slate-400 uppercase italic">График отпусков пуст</p>
+              {/* Notice of State Holidays */}
+              <div className="mb-4 p-3 bg-indigo-50/50 rounded-xl border border-indigo-100/60 flex items-start gap-2.5">
+                <span className="text-base">🇷🇺</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] font-black text-indigo-700 uppercase tracking-wider">Государственные праздники РФ</div>
+                  <div className="text-[9px] text-slate-500 font-medium leading-relaxed mt-0.5">
+                    Автоматически добавлены в календарь сотрудника как выходные дни (Новый Год, 23 Февраля, 8 Марта, 1 и 9 Мая, 12 Июня, 4 Ноября).
                   </div>
-                )}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {(() => {
+                  const personalVacations = (vacations || []).filter(v => !v.isHoliday && !v.id.startsWith('ru-holiday'));
+                  return personalVacations.length > 0 ? (
+                    personalVacations.map((vacation) => (
+                      <div key={vacation.id} className="flex items-center gap-2 p-3 bg-slate-50 rounded-xl border border-slate-100 group shadow-sm">
+                        <div className="flex-1 grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">С</label>
+                            <input 
+                              type="date"
+                              value={vacation.startDate}
+                              onChange={(e) => updateVacation(vacation.id, 'startDate', e.target.value)}
+                              className="w-full text-[11px] font-bold bg-white border border-slate-200 rounded-lg p-1.5 outline-none focus:border-indigo-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">По</label>
+                            <input 
+                              type="date"
+                              value={vacation.endDate}
+                              onChange={(e) => updateVacation(vacation.id, 'endDate', e.target.value)}
+                              className="w-full text-[11px] font-bold bg-white border border-slate-200 rounded-lg p-1.5 outline-none focus:border-indigo-400"
+                            />
+                          </div>
+                        </div>
+                        <button 
+                          type="button"
+                          onClick={() => removeVacation(vacation.id)}
+                          className="p-2 text-slate-300 hover:text-rose-500 transition-colors"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-center py-6 border-2 border-dashed border-slate-100 rounded-2xl">
+                      <p className="text-[11px] font-bold text-slate-400 uppercase italic">График личных отпусков пуст</p>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -661,12 +742,19 @@ const ProjectModal: React.FC<{
   const [trackerUrl, setTrackerUrl] = useState(initialData?.trackerUrl || '');
   const [segment, setSegment] = useState(initialData?.segment || 'детская');
   const [shouldRegenerateTasks, setShouldRegenerateTasks] = useState(false);
-  const [isPrototype, setIsPrototype] = useState(initialData?.isPrototype || false);
+  const [projectType, setProjectType] = useState<'game' | 'prototype' | 'mhi'>(() => {
+    if (initialData?.isPrototype) return 'prototype';
+    if (initialData?.isMhi) return 'mhi';
+    return 'game';
+  });
   const [excludeFromReleases, setExcludeFromReleases] = useState(initialData?.excludeFromReleases || false);
   const [artDirectorRole, setArtDirectorRole] = useState<'artist' | 'curator'>(initialData?.artDirectorRole || 'artist');
   const [processType, setProcessType] = useState<'sequential' | 'parallel'>('sequential');
   const [releaseMonth, setReleaseMonth] = useState<number>(new Date().getMonth());
   const [releaseYear, setReleaseYear] = useState<number>(new Date().getFullYear());
+  const [planningMode, setPlanningMode] = useState<'release' | 'start'>('release');
+  const [startMonth, setStartMonth] = useState<number>(new Date().getMonth());
+  const [startYear, setStartYear] = useState<number>(new Date().getFullYear());
   const [projectStartDate, setProjectStartDate] = useState<string>(
     initialData?.resources[0]?.tasks[0] 
       ? format(new Date(initialData.resources[0].tasks[0].startDate), 'yyyy-MM-dd')
@@ -708,9 +796,9 @@ const ProjectModal: React.FC<{
   ): string => {
     const targetSalesStart = new Date(year, month, 1);
     
-    const cDur = currentDurations['Концептирование'] || 2;
-    const dDur = currentDurations['Девелопмент'] || 2;
-    const aDur = currentDurations['Арт Продакшн'] || 2;
+    const cDur = projectType === 'mhi' ? 0 : (currentDurations['Концептирование'] || 2);
+    const dDur = projectType === 'mhi' ? 0 : (currentDurations['Девелопмент'] || 2);
+    const aDur = projectType === 'mhi' ? 0 : (currentDurations['Арт Продакшн'] || 2);
     const rDur = currentDurations['Редактирование'] || 2;
     const dvDur = currentDurations['Дизайн и вёрстка'] || 2;
     const prodDur = currentDurations['Производство и старт продаж'] || 2;
@@ -720,7 +808,9 @@ const ProjectModal: React.FC<{
     const prodDurationDays = prodDur * 7;
     
     let daysBeforeSales = 0;
-    if (type === 'parallel') {
+    if (projectType === 'mhi') {
+      daysBeforeSales = (rDur + dvDur) * 7 + 14;
+    } else if (type === 'parallel') {
       const maxParallelWeeks = Math.max(dDur, aDur, rDur, dvDur);
       daysBeforeSales = (cDur + maxParallelWeeks) * 7 + riskDuration + prodDurationDays;
     } else {
@@ -732,18 +822,57 @@ const ProjectModal: React.FC<{
     return format(calculatedStart, 'yyyy-MM-dd');
   };
 
+  const getCalculatedReleaseDate = (
+    startDateStr: string,
+    type: 'sequential' | 'parallel',
+    currentDurations: Record<string, number>,
+    currentWeight: number | string
+  ): Date => {
+    const start = new Date(startDateStr);
+    
+    const cDur = projectType === 'mhi' ? 0 : (currentDurations['Концептирование'] || 2);
+    const dDur = projectType === 'mhi' ? 0 : (currentDurations['Девелопмент'] || 2);
+    const aDur = projectType === 'mhi' ? 0 : (currentDurations['Арт Продакшн'] || 2);
+    const rDur = currentDurations['Редактирование'] || 2;
+    const dvDur = currentDurations['Дизайн и вёрстка'] || 2;
+    const prodDur = currentDurations['Производство и старт продаж'] || 2;
+    
+    const numericWeight = getNumericWeight(currentWeight);
+    const riskDuration = numericWeight <= 3 ? 28 : 56;
+    const prodDurationDays = prodDur * 7;
+    
+    let daysBeforeSales = 0;
+    if (projectType === 'mhi') {
+      daysBeforeSales = (rDur + dvDur) * 7 + 14;
+    } else if (type === 'parallel') {
+      const maxParallelWeeks = Math.max(dDur, aDur, rDur, dvDur);
+      daysBeforeSales = (cDur + maxParallelWeeks) * 7 + riskDuration + prodDurationDays;
+    } else {
+      const endOffset = cDur + dDur + aDur + rDur + dvDur;
+      daysBeforeSales = endOffset * 7 + riskDuration + prodDurationDays;
+    }
+    return addDays(start, daysBeforeSales);
+  };
+
   // Helper to recalculate all dates based on process type
   const recalculateAllDates = (baseStart: string, type: 'sequential' | 'parallel', currentDurations: Record<string, number>) => {
     const start = new Date(baseStart);
     const newStageDates: Record<string, string> = {};
     
-    const cDur = currentDurations['Концептирование'] || 2;
-    const dDur = currentDurations['Девелопмент'] || 2;
-    const aDur = currentDurations['Арт Продакшн'] || 2;
+    const cDur = projectType === 'mhi' ? 0 : (currentDurations['Концептирование'] || 2);
+    const dDur = projectType === 'mhi' ? 0 : (currentDurations['Девелопмент'] || 2);
+    const aDur = projectType === 'mhi' ? 0 : (currentDurations['Арт Продакшн'] || 2);
     const rDur = currentDurations['Редактирование'] || 2;
     const dvDur = currentDurations['Дизайн и вёрстка'] || 2;
 
-    if (type === 'parallel') {
+    if (projectType === 'mhi') {
+      newStageDates['Концептирование'] = format(start, 'yyyy-MM-dd');
+      newStageDates['Девелопмент'] = format(start, 'yyyy-MM-dd');
+      newStageDates['Арт Продакшн'] = format(start, 'yyyy-MM-dd');
+      newStageDates['Редактирование'] = format(start, 'yyyy-MM-dd');
+      newStageDates['Дизайн и вёрстка'] = format(addDays(start, rDur * 7), 'yyyy-MM-dd');
+      newStageDates['Производство и старт продаж'] = format(addDays(start, (rDur + dvDur) * 7), 'yyyy-MM-dd');
+    } else if (type === 'parallel') {
       const maxParallelWeeks = Math.max(dDur, aDur, rDur, dvDur);
       
       newStageDates['Концептирование'] = format(start, 'yyyy-MM-dd');
@@ -810,11 +939,14 @@ const ProjectModal: React.FC<{
         setProcessType('sequential');
       }
 
-      setProjectStartDate(
-        initialData.resources[0]?.tasks[0] 
-          ? format(new Date(initialData.resources[0].tasks[0].startDate), 'yyyy-MM-dd')
-          : format(new Date(), 'yyyy-MM-dd')
-      );
+      const startS = initialData.resources[0]?.tasks[0] 
+        ? format(new Date(initialData.resources[0].tasks[0].startDate), 'yyyy-MM-dd')
+        : format(new Date(), 'yyyy-MM-dd');
+      setProjectStartDate(startS);
+      const startD = new Date(startS);
+      setStartMonth(startD.getMonth());
+      setStartYear(startD.getFullYear());
+      setPlanningMode('release');
 
       let initialSalesDate = new Date();
       const specRes = initialData.resources.find(r => r.role === 'Производство и старт продаж');
@@ -844,6 +976,9 @@ const ProjectModal: React.FC<{
       const today = new Date();
       setReleaseMonth(today.getMonth());
       setReleaseYear(today.getFullYear());
+      setStartMonth(today.getMonth());
+      setStartYear(today.getFullYear());
+      setPlanningMode('release');
       setAssignments(DEFAULT_STAGES.reduce((acc, stage) => ({ ...acc, [stage]: '' }), {}));
       
       const newDurations = getRegulatoryDurationsForWeight(1);
@@ -855,16 +990,37 @@ const ProjectModal: React.FC<{
     }
   }, [initialData, isOpen]);
 
-  // Synchronize durations when weight changes during project creation (unless editing)
+  // Synchronize durations when weight or project type changes during project creation (unless editing)
   useEffect(() => {
     if (!initialData && isOpen) {
       const regDurations = getRegulatoryDurationsForWeight(weight);
       setDurations(regDurations);
-      const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, regDurations, weight);
-      setProjectStartDate(startStr);
-      recalculateAllDates(startStr, processType, regDurations);
+      if (planningMode === 'release') {
+        const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, regDurations, weight);
+        setProjectStartDate(startStr);
+        recalculateAllDates(startStr, processType, regDurations);
+      } else {
+        const startStr = format(new Date(startYear, startMonth, 1), 'yyyy-MM-dd');
+        setProjectStartDate(startStr);
+        recalculateAllDates(startStr, processType, regDurations);
+        const computedReleaseDate = getCalculatedReleaseDate(startStr, processType, regDurations, weight);
+        setReleaseMonth(computedReleaseDate.getMonth());
+        setReleaseYear(computedReleaseDate.getFullYear());
+      }
     }
-  }, [weight, isOpen, initialData, releaseMonth, releaseYear, processType]);
+  }, [weight, isOpen, initialData, releaseMonth, releaseYear, startMonth, startYear, processType, projectType, planningMode]);
+
+  // Automatically force task regeneration and date recalculation when projectType changes
+  useEffect(() => {
+    if (isOpen) {
+      setShouldRegenerateTasks(true);
+      if (initialData) {
+        // If editing, recalculate start dates based on existing project state but with new type logic
+        const startStr = projectStartDate;
+        recalculateAllDates(startStr, processType, durations);
+      }
+    }
+  }, [projectType, isOpen]);
 
   const getFilteredUsers = (stage: string) => {
     const requiredRole = STAGE_TO_ROLE[stage];
@@ -1034,6 +1190,36 @@ const ProjectModal: React.FC<{
         });
       }
 
+      if (projectType === 'mhi') {
+        finalResources = finalResources.map(r => {
+          if (r.role === 'Концептирование' || r.role === 'Арт Продакшн' || r.role === 'Девелопмент') {
+            return {
+              ...r,
+              tasks: []
+            };
+          }
+          if (r.role === 'Производство и старт продаж') {
+            const existingMhiTask = r.tasks.find(t => t.label === 'Передача в МХИ');
+            const mhiStartDate = stageStartDates['Производство и старт продаж'] ? new Date(stageStartDates['Производство и старт продаж']) : new Date(projectStartDate);
+
+            return {
+              ...r,
+              tasks: [
+                {
+                  id: existingMhiTask?.id || Math.random().toString(36).substr(2, 9),
+                  label: 'Передача в МХИ',
+                  startDate: mhiStartDate,
+                  duration: 14,
+                  color: 'purple',
+                  status: existingMhiTask?.status || 'neutral'
+                }
+              ]
+            };
+          }
+          return r;
+        });
+      }
+
       const projectData: Project = {
         id: projectId,
         name,
@@ -1044,7 +1230,8 @@ const ProjectModal: React.FC<{
         trackerUrl,
         segment,
         resources: finalResources,
-        isPrototype,
+        isPrototype: projectType === 'prototype',
+        isMhi: projectType === 'mhi',
         excludeFromReleases,
         artDirectorRole,
         sortOrder: initialData?.sortOrder ?? 0
@@ -1093,7 +1280,7 @@ const ProjectModal: React.FC<{
                   <div>
                     <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Вес</label>
                     <select 
-                      className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 cursor-pointer font-bold text-slate-700"
+                      className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 cursor-pointer font-bold text-slate-700 text-xs"
                       value={weight}
                       onChange={(e) => {
                         const val = e.target.value;
@@ -1107,67 +1294,169 @@ const ProjectModal: React.FC<{
                     </select>
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Месяц и год выхода проекта</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <select
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 font-bold text-slate-700 cursor-pointer text-xs"
-                        value={releaseMonth}
-                        onChange={(e) => {
-                          const newMonth = Number(e.target.value);
-                          setReleaseMonth(newMonth);
-                          const startStr = calculateProjectStartDate(newMonth, releaseYear, processType, durations, weight);
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Режим планирования</label>
+                    <div className="flex bg-white border border-slate-200 p-1 rounded-xl gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPlanningMode('release');
+                          const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, durations, weight);
                           setProjectStartDate(startStr);
                           recalculateAllDates(startStr, processType, durations);
                         }}
+                        className={`flex-1 py-1.5 text-center text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
+                          planningMode === 'release'
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-600'
+                        }`}
                       >
-                        {MONTH_NAMES.map((name, idx) => (
-                          <option key={idx} value={idx}>{name}</option>
-                        ))}
-                      </select>
-                      <select
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 font-bold text-slate-700 cursor-pointer text-xs"
-                        value={releaseYear}
-                        onChange={(e) => {
-                          const newYear = Number(e.target.value);
-                          setReleaseYear(newYear);
-                          const startStr = calculateProjectStartDate(releaseMonth, newYear, processType, durations, weight);
-                          setProjectStartDate(startStr);
-                          recalculateAllDates(startStr, processType, durations);
+                        По выходу
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPlanningMode('start');
+                          const d = new Date(projectStartDate);
+                          setStartMonth(d.getMonth());
+                          setStartYear(d.getFullYear());
+                          recalculateAllDates(projectStartDate, processType, durations);
+                          const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, processType, durations, weight);
+                          setReleaseMonth(computedReleaseDate.getMonth());
+                          setReleaseYear(computedReleaseDate.getFullYear());
                         }}
+                        className={`flex-1 py-1.5 text-center text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
+                          planningMode === 'start'
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'text-slate-400 hover:text-slate-600'
+                        }`}
                       >
-                        {Array.from({ length: 8 }, (_, i) => 2025 + i).map(yr => (
-                          <option key={yr} value={yr}>{yr}</option>
-                        ))}
-                      </select>
+                        По старту
+                      </button>
                     </div>
                   </div>
                 </div>
+
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Этап проекта</label>
-                  <div className="flex bg-white border border-slate-200 p-1 rounded-xl">
+                  {planningMode === 'release' ? (
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Месяц и год выхода проекта</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <select
+                          className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 font-bold text-slate-700 cursor-pointer text-xs"
+                          value={releaseMonth}
+                          onChange={(e) => {
+                            const newMonth = Number(e.target.value);
+                            setReleaseMonth(newMonth);
+                            const startStr = calculateProjectStartDate(newMonth, releaseYear, processType, durations, weight);
+                            setProjectStartDate(startStr);
+                            recalculateAllDates(startStr, processType, durations);
+                          }}
+                        >
+                          {MONTH_NAMES.map((name, idx) => (
+                            <option key={idx} value={idx}>{name}</option>
+                          ))}
+                        </select>
+                        <select
+                          className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 font-bold text-slate-700 cursor-pointer text-xs"
+                          value={releaseYear}
+                          onChange={(e) => {
+                            const newYear = Number(e.target.value);
+                            setReleaseYear(newYear);
+                            const startStr = calculateProjectStartDate(releaseMonth, newYear, processType, durations, weight);
+                            setProjectStartDate(startStr);
+                            recalculateAllDates(startStr, processType, durations);
+                          }}
+                        >
+                          {Array.from({ length: 8 }, (_, i) => 2025 + i).map(yr => (
+                            <option key={yr} value={yr}>{yr}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Месяц и год старта проекта</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <select
+                          className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 font-bold text-slate-700 cursor-pointer text-xs"
+                          value={startMonth}
+                          onChange={(e) => {
+                            const newMonth = Number(e.target.value);
+                            setStartMonth(newMonth);
+                            const startStr = format(new Date(startYear, newMonth, 1), 'yyyy-MM-dd');
+                            setProjectStartDate(startStr);
+                            recalculateAllDates(startStr, processType, durations);
+                            
+                            const computedReleaseDate = getCalculatedReleaseDate(startStr, processType, durations, weight);
+                            setReleaseMonth(computedReleaseDate.getMonth());
+                            setReleaseYear(computedReleaseDate.getFullYear());
+                          }}
+                        >
+                          {MONTH_NAMES.map((name, idx) => (
+                            <option key={idx} value={idx}>{name}</option>
+                          ))}
+                        </select>
+                        <select
+                          className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 font-bold text-slate-700 cursor-pointer text-xs"
+                          value={startYear}
+                          onChange={(e) => {
+                            const newYear = Number(e.target.value);
+                            setStartYear(newYear);
+                            const startStr = format(new Date(newYear, startMonth, 1), 'yyyy-MM-dd');
+                            setProjectStartDate(startStr);
+                            recalculateAllDates(startStr, processType, durations);
+                            
+                            const computedReleaseDate = getCalculatedReleaseDate(startStr, processType, durations, weight);
+                            setReleaseMonth(computedReleaseDate.getMonth());
+                            setReleaseYear(computedReleaseDate.getFullYear());
+                          }}
+                        >
+                          {Array.from({ length: 8 }, (_, i) => 2025 + i).map(yr => (
+                            <option key={yr} value={yr}>{yr}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Тип проекта</label>
+                  <div className="flex bg-white border border-slate-200 p-1 rounded-xl gap-1">
                     <button
                       type="button"
-                      onClick={() => setIsPrototype(false)}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
-                        !isPrototype 
+                      onClick={() => setProjectType('game')}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-all ${
+                        projectType === 'game' 
                           ? 'bg-indigo-600 text-white shadow-md' 
                           : 'text-slate-500 hover:bg-slate-50'
                       }`}
                     >
                       <Layers size={14} />
-                      <span>В работе</span>
+                      <span>Игра</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => setIsPrototype(true)}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
-                        isPrototype 
+                      onClick={() => setProjectType('prototype')}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-all ${
+                        projectType === 'prototype' 
                           ? 'bg-amber-600 text-white shadow-md' 
                           : 'text-slate-500 hover:bg-slate-50'
                       }`}
                     >
                       <Cpu size={14} />
                       <span>Прототип</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setProjectType('mhi')}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-all ${
+                        projectType === 'mhi' 
+                          ? 'bg-purple-600 text-white shadow-md' 
+                          : 'text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Sparkles size={14} />
+                      <span>МХИ</span>
                     </button>
                   </div>
                 </div>
@@ -1193,9 +1482,16 @@ const ProjectModal: React.FC<{
                       type="button"
                       onClick={() => {
                         setProcessType('sequential');
-                        const startStr = calculateProjectStartDate(releaseMonth, releaseYear, 'sequential', durations, weight);
-                        setProjectStartDate(startStr);
-                        recalculateAllDates(startStr, 'sequential', durations);
+                        if (planningMode === 'release') {
+                          const startStr = calculateProjectStartDate(releaseMonth, releaseYear, 'sequential', durations, weight);
+                          setProjectStartDate(startStr);
+                          recalculateAllDates(startStr, 'sequential', durations);
+                        } else {
+                          recalculateAllDates(projectStartDate, 'sequential', durations);
+                          const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, 'sequential', durations, weight);
+                          setReleaseMonth(computedReleaseDate.getMonth());
+                          setReleaseYear(computedReleaseDate.getFullYear());
+                        }
                       }}
                       className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
                         processType === 'sequential' 
@@ -1209,9 +1505,16 @@ const ProjectModal: React.FC<{
                       type="button"
                       onClick={() => {
                         setProcessType('parallel');
-                        const startStr = calculateProjectStartDate(releaseMonth, releaseYear, 'parallel', durations, weight);
-                        setProjectStartDate(startStr);
-                        recalculateAllDates(startStr, 'parallel', durations);
+                        if (planningMode === 'release') {
+                          const startStr = calculateProjectStartDate(releaseMonth, releaseYear, 'parallel', durations, weight);
+                          setProjectStartDate(startStr);
+                          recalculateAllDates(startStr, 'parallel', durations);
+                        } else {
+                          recalculateAllDates(projectStartDate, 'parallel', durations);
+                          const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, 'parallel', durations, weight);
+                          setReleaseMonth(computedReleaseDate.getMonth());
+                          setReleaseYear(computedReleaseDate.getFullYear());
+                        }
                       }}
                       className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
                         processType === 'parallel' 
@@ -1379,11 +1682,16 @@ const ProjectModal: React.FC<{
                 )}
               </div>
               <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                {DEFAULT_STAGES.map((stage, sIdx) => {
+                {DEFAULT_STAGES.filter(stage => {
+                  if (projectType === 'mhi') {
+                    return stage !== 'Концептирование' && stage !== 'Девелопмент' && stage !== 'Арт Продакшн';
+                  }
+                  return true;
+                }).map((stage, sIdx, filteredArr) => {
                   const startDate = stageStartDates[stage] || projectStartDate;
                   const durationWeeks = durations[stage] || 2;
                   const endDate = format(addWeeks(new Date(startDate), durationWeeks), 'yyyy-MM-dd');
-                  const isLastStage = sIdx === DEFAULT_STAGES.length - 1;
+                  const isLastStage = sIdx === filteredArr.length - 1;
 
                   return (
                     <div key={stage} className={`space-y-2 pb-4 ${isLastStage ? '' : 'border-b border-slate-200'} last:border-0 last:pb-0`}>
@@ -1427,9 +1735,16 @@ const ProjectModal: React.FC<{
                               const val = Number(e.target.value);
                               const newDurations = { ...durations, [stage]: val };
                               setDurations(newDurations);
-                              const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, newDurations, weight);
-                              setProjectStartDate(startStr);
-                              recalculateAllDates(startStr, processType, newDurations);
+                              if (planningMode === 'release') {
+                                const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, newDurations, weight);
+                                setProjectStartDate(startStr);
+                                recalculateAllDates(startStr, processType, newDurations);
+                              } else {
+                                recalculateAllDates(projectStartDate, processType, newDurations);
+                                const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, processType, newDurations, weight);
+                                setReleaseMonth(computedReleaseDate.getMonth());
+                                setReleaseYear(computedReleaseDate.getFullYear());
+                              }
                             }}
                           />
                         </div>
@@ -1472,34 +1787,54 @@ const ProjectModal: React.FC<{
                     </div>
                   );
                 })}
-                <div className="pt-4 mt-2 border-t-2 border-dashed border-slate-200">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-[10px] font-bold text-indigo-700 uppercase">Производство и старт продаж</span>
-                  </div>
-                  <div className="grid grid-cols-[1.2fr,1.8fr] gap-3 items-end">
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-slate-400 uppercase">Недели (Прод.)</label>
-                      <input 
-                        type="number"
-                        min="1"
-                        className="w-full px-2 py-2 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:border-indigo-500"
-                        value={durations['Производство и старт продаж']}
-                        onChange={(e) => {
-                          const val = Number(e.target.value);
-                          const newDurations = { ...durations, ['Производство и старт продаж']: val };
-                          setDurations(newDurations);
-                          const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, newDurations, weight);
-                          setProjectStartDate(startStr);
-                          recalculateAllDates(startStr, processType, newDurations);
-                        }}
-                      />
+                {projectType === 'mhi' ? (
+                  <div className="pt-4 mt-2 border-t border-dashed border-slate-200 space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-bold text-purple-700 uppercase">Передача в МХИ</span>
                     </div>
-                    <div className="space-y-1 pb-2">
-                      <div className="text-[9px] font-bold text-slate-400 uppercase">Суммарный срок этапа</div>
-                      <div className="text-[10px] text-slate-500 italic">С учетом рисков и продаж</div>
+                    <div className="p-3 bg-purple-50/50 border border-purple-100 rounded-xl">
+                      <span className="text-[11px] text-purple-950 font-medium leading-tight block">
+                        Будет создана двухнедельная задача «Передача в МХИ». Сроки и старт продаж по регламенту не планируются.
+                      </span>
                     </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="pt-4 mt-2 border-t-2 border-dashed border-slate-200">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-[10px] font-bold text-indigo-700 uppercase">Производство и старт продаж</span>
+                    </div>
+                    <div className="grid grid-cols-[1.2fr,1.8fr] gap-3 items-end">
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-slate-400 uppercase">Недели (Прод.)</label>
+                        <input 
+                          type="number"
+                          min="1"
+                          className="w-full px-2 py-2 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:border-indigo-500"
+                          value={durations['Производство и старт продаж']}
+                          onChange={(e) => {
+                            const val = Number(e.target.value);
+                            const newDurations = { ...durations, ['Производство и старт продаж']: val };
+                            setDurations(newDurations);
+                            if (planningMode === 'release') {
+                              const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, newDurations, weight);
+                              setProjectStartDate(startStr);
+                              recalculateAllDates(startStr, processType, newDurations);
+                            } else {
+                              recalculateAllDates(projectStartDate, processType, newDurations);
+                              const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, processType, newDurations, weight);
+                              setReleaseMonth(computedReleaseDate.getMonth());
+                              setReleaseYear(computedReleaseDate.getFullYear());
+                            }
+                          }}
+                        />
+                      </div>
+                      <div className="space-y-1 pb-2">
+                        <div className="text-[9px] font-bold text-slate-400 uppercase">Суммарный срок этапа</div>
+                        <div className="text-[10px] text-slate-500 italic">С учетом рисков и продаж</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1650,11 +1985,18 @@ const TaskBlock: React.FC<{
     };
 
     if (isDragging || isResizingRight || isResizingLeft) {
+      (window as any).__isInteracting = true;
+      document.body.classList.add('user-is-interacting');
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
+    } else {
+      (window as any).__isInteracting = false;
+      document.body.classList.remove('user-is-interacting');
     }
 
     return () => {
+      (window as any).__isInteracting = false;
+      document.body.classList.remove('user-is-interacting');
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
@@ -2156,7 +2498,45 @@ export default function App() {
       .then(res => res.json())
       .then(data => {
         if (data && data.length > 0) {
-          setUsers(data);
+          let updatedAny = false;
+          const updatedUsers = data.map((user: User) => {
+            const currentVacations = user.vacations || [];
+            const holidayIds = new Set(currentVacations.map(v => v.id));
+            
+            const holidaysToAdd: any[] = [];
+            [2025, 2026, 2027, 2028].forEach(year => {
+              const yearHolidays = getRussianHolidaysForYear(year);
+              yearHolidays.forEach(h => {
+                if (!holidayIds.has(h.id)) {
+                  holidaysToAdd.push(h);
+                }
+              });
+            });
+            
+            if (holidaysToAdd.length > 0) {
+              updatedAny = true;
+              return {
+                ...user,
+                vacations: [...currentVacations, ...holidaysToAdd]
+              };
+            }
+            return user;
+          });
+          
+          setUsers(updatedUsers);
+          
+          if (updatedAny) {
+            updatedUsers.forEach((user: User) => {
+              const original = data.find((u: User) => u.id === user.id);
+              if (original && JSON.stringify(original.vacations) !== JSON.stringify(user.vacations)) {
+                fetch('/api/users', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(user)
+                }).catch(err => console.error("Failed to sync auto-holiday for user", user.name, err));
+              }
+            });
+          }
         }
       })
       .catch(err => console.error('Failed to fetch users', err));
@@ -2173,6 +2553,8 @@ export default function App() {
         }, 800);
       });
   }, []);
+
+
 
   const [diceValue, setDiceValue] = useState(5);
   const [userRole, setUserRole] = useState<'editor' | 'viewer' | null>(() => {
@@ -2356,6 +2738,126 @@ export default function App() {
     });
   };
   const [delayConfirmation, setDelayConfirmation] = useState<{ projectId: string; resourceId: string; taskId: string; delayTask: Task } | null>(null);
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    let isPolling = false;
+    
+    const interval = setInterval(async () => {
+      // Check if user is actively interacting to prevent overriding active states
+      if (
+        (window as any).__isInteracting || 
+        modalMode !== null || 
+        editingProjectId !== null || 
+        editingUserId !== null || 
+        reassigning !== null || 
+        delayConfirmation !== null
+      ) {
+        return;
+      }
+      
+      // Also check if any text input/textarea is currently focused to avoid stealing focus during typing
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.hasAttribute('contenteditable'))) {
+        return;
+      }
+
+      if (isPolling) return;
+      isPolling = true;
+
+      try {
+        const fetchProjects = fetch('/api/projects').then(res => res.json());
+        const fetchUsers = fetch('/api/users').then(res => res.json());
+        
+        const [projectsData, usersData] = await Promise.all([fetchProjects, fetchUsers]);
+        
+        // Ensure no other updates happened while we fetched, and user is still not interacting
+        if (
+          (window as any).__isInteracting || 
+          modalMode !== null || 
+          editingProjectId !== null || 
+          editingUserId !== null || 
+          reassigning !== null || 
+          delayConfirmation !== null
+        ) {
+          isPolling = false;
+          return;
+        }
+
+        // 1. Process projects
+        if (projectsData && projectsData.length > 0) {
+          const processedProjects = projectsData.map((p: Project) => ({
+            ...p,
+            resources: p.resources.map(r => ({
+              ...r,
+              tasks: r.tasks.map(t => ({
+                ...t,
+                startDate: new Date(t.startDate)
+              }))
+            }))
+          })).sort((a: Project, b: Project) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+
+          // Compare JSON stringified forms to only update when there is an actual difference
+          const projectsChanged = JSON.stringify(projects) !== JSON.stringify(processedProjects);
+          if (projectsChanged) {
+            setProjects(processedProjects);
+            
+            // Sync collapsed state mapping if there are any new projects
+            setCollapsedProjects(prev => {
+              const updated = { ...prev };
+              let changed = false;
+              processedProjects.forEach((p: Project) => {
+                if (p.isCollapsed !== undefined && updated[p.id] !== p.isCollapsed) {
+                  updated[p.id] = p.isCollapsed;
+                  changed = true;
+                }
+              });
+              return changed ? updated : prev;
+            });
+          }
+        }
+
+        // 2. Process users
+        if (usersData && usersData.length > 0) {
+          const processedUsers = usersData.map((user: User) => {
+            const currentVacations = user.vacations || [];
+            const holidayIds = new Set(currentVacations.map(v => v.id));
+            
+            const holidaysToAdd: any[] = [];
+            [2025, 2026, 2027, 2028].forEach(year => {
+              const yearHolidays = getRussianHolidaysForYear(year);
+              yearHolidays.forEach(h => {
+                if (!holidayIds.has(h.id)) {
+                  holidaysToAdd.push(h);
+                }
+              });
+            });
+            
+            if (holidaysToAdd.length > 0) {
+              return {
+                ...user,
+                vacations: [...currentVacations, ...holidaysToAdd]
+              };
+            }
+            return user;
+          });
+
+          const usersChanged = JSON.stringify(users) !== JSON.stringify(processedUsers);
+          if (usersChanged) {
+            setUsers(processedUsers);
+          }
+        }
+      } catch (err) {
+        console.error("Auto-update fetch failed:", err);
+      } finally {
+        isPolling = false;
+      }
+    }, 5000); // Poll every 5 seconds
+
+    return () => clearInterval(interval);
+  }, [isLoading, projects, users, modalMode, editingProjectId, editingUserId, reassigning, delayConfirmation]);
+
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -2368,6 +2870,12 @@ export default function App() {
       const year = parseInt(releaseYearFilter);
       // Start from the beginning of the week containing December 1st of the previous year
       return startOfWeek(new Date(year - 1, 11, 1), { weekStartsOn: 1 });
+    }
+    if (activeTab.startsWith('projects_')) {
+      const year = parseInt(activeTab.replace('projects_', ''));
+      if (!isNaN(year)) {
+        return startOfWeek(new Date(year, 0, 1), { weekStartsOn: 1 });
+      }
     }
     return startOfWeek(currentDate, { weekStartsOn: 1 });
   }, [currentDate, activeTab, releaseYearFilter]);
@@ -2398,7 +2906,7 @@ export default function App() {
   }, [projects, projectSearch, activeTab, releaseYearFilter]);
 
   const projectYears = useMemo(() => {
-    const years = new Set<number>([2026, 2027]);
+    const years = new Set<number>([2026, 2027, 2028]);
     projects.forEach(p => {
       if (!p.isPrototype) {
         const yr = p.releaseYear || getProjectReleaseDate(p).getFullYear();
@@ -2610,11 +3118,29 @@ export default function App() {
   const saveUser = async (userData: User) => {
     if (isReadOnly) return;
     recordAction();
+    
+    // Inject holidays if they don't exist
+    const currentVacations = userData.vacations || [];
+    const holidayIds = new Set(currentVacations.map(v => v.id));
+    const holidaysToAdd: any[] = [];
+    [2025, 2026, 2027, 2028].forEach(year => {
+      const yearHolidays = getRussianHolidaysForYear(year);
+      yearHolidays.forEach(h => {
+        if (!holidayIds.has(h.id)) {
+          holidaysToAdd.push(h);
+        }
+      });
+    });
+    
+    const finalUserData = holidaysToAdd.length > 0
+      ? { ...userData, vacations: [...currentVacations, ...holidaysToAdd] }
+      : userData;
+
     // Optimistic UI update
-    if (users.find(u => u.id === userData.id)) {
-      setUsers(prev => prev.map(u => u.id === userData.id ? userData : u));
+    if (users.find(u => u.id === finalUserData.id)) {
+      setUsers(prev => prev.map(u => u.id === finalUserData.id ? finalUserData : u));
     } else {
-      setUsers(prev => [...prev, userData]);
+      setUsers(prev => [...prev, finalUserData]);
     }
 
     // Server-side update
@@ -2622,7 +3148,7 @@ export default function App() {
       const response = await fetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(userData)
+        body: JSON.stringify(finalUserData)
       });
       if (!response.ok) throw new Error('Failed to save user');
     } catch (error) {
@@ -2652,13 +3178,42 @@ export default function App() {
     }
   };
 
+  const weeks = useMemo(() => {
+    let count = viewportWeeks;
+    if (activeTab === 'projects') {
+      const maxYear = projectYears.length > 0 ? Math.max(...projectYears) : 2028;
+      const endOfMaxYear = new Date(maxYear, 11, 31);
+      count = Math.ceil(differenceInDays(endOfMaxYear, timelineStart) / 7);
+    } else if (activeTab === 'releases' && releaseYearFilter !== 'all') {
+      const year = parseInt(releaseYearFilter);
+      // End date is December 31st of the selected year
+      const endOfYear = new Date(year, 11, 31);
+      // Calculate how many weeks from timelineStart to endOfYear
+      // We use differenceInDays because differenceInWeeks might truncate
+      count = Math.ceil(differenceInDays(endOfYear, timelineStart) / 7);
+    }
+    return Array.from({ length: count }, (_, i) => addWeeks(timelineStart, i));
+  }, [timelineStart, viewportWeeks, activeTab, releaseYearFilter, projectYears]);
+
+  const months = useMemo(() => {
+    const monthMap: Record<string, { label: string; daysInTimeline: number }> = {};
+    weeks.forEach(weekStart => {
+      const key = format(weekStart, 'LLLL yyyy', { locale: ru });
+      if (!monthMap[key]) {
+        monthMap[key] = { label: key.charAt(0).toUpperCase() + key.slice(1), daysInTimeline: 0 };
+      }
+      monthMap[key].daysInTimeline += 7;
+    });
+    return Object.values(monthMap);
+  }, [weeks]);
+
   const scrollToToday = (behaviorParam?: ScrollBehavior | any) => {
     const behavior: ScrollBehavior = (behaviorParam === 'smooth' || behaviorParam === 'auto') ? behaviorParam : 'smooth';
     if (scrollContainerRef.current) {
       const today = new Date();
       if (today >= timelineStart) {
         const weeksFromStart = Math.floor(differenceInDays(today, timelineStart) / 7);
-        if (weeksFromStart < viewportWeeks) {
+        if (weeksFromStart < weeks.length) {
           scrollContainerRef.current.scrollTo({
             left: weeksFromStart * CELL_WIDTH,
             behavior
@@ -2683,32 +3238,7 @@ export default function App() {
       clearTimeout(t4);
       clearTimeout(t5);
     };
-  }, []);
-
-  const weeks = useMemo(() => {
-    let count = viewportWeeks;
-    if (activeTab === 'releases' && releaseYearFilter !== 'all') {
-      const year = parseInt(releaseYearFilter);
-      // End date is December 31st of the selected year
-      const endOfYear = new Date(year, 11, 31);
-      // Calculate how many weeks from timelineStart to endOfYear
-      // We use differenceInDays because differenceInWeeks might truncate
-      count = Math.ceil(differenceInDays(endOfYear, timelineStart) / 7);
-    }
-    return Array.from({ length: count }, (_, i) => addWeeks(timelineStart, i));
-  }, [timelineStart, viewportWeeks, activeTab, releaseYearFilter]);
-
-  const months = useMemo(() => {
-    const monthMap: Record<string, { label: string; daysInTimeline: number }> = {};
-    weeks.forEach(weekStart => {
-      const key = format(weekStart, 'LLLL yyyy', { locale: ru });
-      if (!monthMap[key]) {
-        monthMap[key] = { label: key.charAt(0).toUpperCase() + key.slice(1), daysInTimeline: 0 };
-      }
-      monthMap[key].daysInTimeline += 7;
-    });
-    return Object.values(monthMap);
-  }, [weeks]);
+  }, [weeks.length]);
 
   const updateProjectWeight = (projectId: string, delta: number) => {
     if (isReadOnly) return;
@@ -3508,9 +4038,20 @@ export default function App() {
                                 {!project.imageUrl && <MoreVertical size={14} className="opacity-0 group-hover:opacity-100 text-slate-400 flex-shrink-0" />}
                               </div>
                             </div>
-                            {project.segment && (
-                                <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest leading-none mb-0.5">{project.segment}</span>
-                            )}
+                            <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                              {project.segment && (
+                                <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest leading-none">{project.segment}</span>
+                              )}
+                              <span className={`text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded leading-none ${
+                                project.isPrototype 
+                                  ? 'bg-amber-50 text-amber-700 border border-amber-100' 
+                                  : project.isMhi 
+                                    ? 'bg-purple-50 text-purple-700 border border-purple-100' 
+                                    : 'bg-indigo-50 text-indigo-700 border border-indigo-100'
+                              }`}>
+                                {project.isPrototype ? 'Прототип' : project.isMhi ? 'МХИ' : 'Игра'}
+                              </span>
+                            </div>
                             {!isReleasesTab && (
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
                                 <div className="flex items-center gap-1">
@@ -3826,7 +4367,7 @@ export default function App() {
                             <div 
                               key={project.id} 
                               style={{ height: rowHeight }}
-                              className={`border-b-2 border-slate-400 overflow-hidden ${isOverLimit ? 'bg-red-50/20' : ''}`}
+                              className={`border-b-2 border-slate-400 relative ${isCollapsed ? 'overflow-hidden' : 'overflow-visible'} ${reassigning?.projectId === project.id ? 'z-30' : 'z-10'} ${isOverLimit ? 'bg-red-50/20' : ''}`}
                             >
                               {isCollapsed ? (
                                 <div className="h-full flex items-center px-4 text-[10px] text-slate-400 font-medium italic select-none">
@@ -3967,26 +4508,29 @@ export default function App() {
                                       setModalMode('edit');
                                     }}
                                   >
-                                    {user.vacations && user.vacations.length > 0 ? (
-                                      <div className="space-y-1">
-                                        {user.vacations.slice(0, 2).map((v) => (
-                                          <div key={v.id} className="text-[9px] font-bold text-slate-600 flex items-center gap-1">
-                                            <div className="w-1 h-1 rounded-full bg-rose-400" />
-                                            {format(new Date(v.startDate), 'd MMM', { locale: ru })} - {format(new Date(v.endDate), 'd MMM', { locale: ru })}
-                                          </div>
-                                        ))}
-                                        {user.vacations.length > 2 && (
-                                          <div className="text-[8px] text-slate-400 font-bold uppercase tracking-widest">
-                                            + еще {user.vacations.length - 2}
-                                          </div>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <button className="flex items-center gap-1.5 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:text-indigo-600 transition-colors">
-                                        <Plus size={12} strokeWidth={3} />
-                                        <span>Добавить</span>
-                                      </button>
-                                    )}
+                                    {(() => {
+                                      const personalVacations = (user.vacations || []).filter(v => !v.isHoliday && !v.id.startsWith('ru-holiday'));
+                                      return personalVacations.length > 0 ? (
+                                        <div className="space-y-1">
+                                          {personalVacations.slice(0, 2).map((v) => (
+                                            <div key={v.id} className="text-[9px] font-bold text-slate-600 flex items-center gap-1">
+                                              <div className="w-1 h-1 rounded-full bg-rose-400" />
+                                              {format(new Date(v.startDate), 'd MMM', { locale: ru })} - {format(new Date(v.endDate), 'd MMM', { locale: ru })}
+                                            </div>
+                                          ))}
+                                          {personalVacations.length > 2 && (
+                                            <div className="text-[8px] text-slate-400 font-bold uppercase tracking-widest">
+                                              + еще {personalVacations.length - 2}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <button className="flex items-center gap-1.5 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:text-indigo-600 transition-colors">
+                                          <Plus size={12} strokeWidth={3} />
+                                          <span>Добавить</span>
+                                        </button>
+                                      );
+                                    })()}
                                   </div>
                                 );
                               })}
@@ -4192,20 +4736,30 @@ export default function App() {
                           const leftPos = (differenceInDays(start, timelineStart) / 7) * CELL_WIDTH;
                           const width = (duration / 7) * CELL_WIDTH;
                           
-                          if (leftPos + width < 0 || leftPos > viewportWeeks * CELL_WIDTH) return null;
+                          if (leftPos + width < 0 || leftPos > weeks.length * CELL_WIDTH) return null;
+
+                          const isHoliday = vacation.isHoliday || vacation.id.startsWith('ru-holiday');
+                          const stripesColor = isHoliday ? 'rgba(99, 102, 241, 0.2)' : 'rgba(239, 68, 68, 0.25)';
+                          const borderColor = isHoliday ? 'border-indigo-500/30' : 'border-red-500/30';
+                          const textColor = isHoliday ? 'text-indigo-600' : 'text-red-600';
+                          const bgColor = isHoliday ? 'bg-indigo-500/10' : 'bg-red-500/10';
+                          const labelText = isHoliday ? `🇷🇺 ${vacation.holidayName || 'ГОС. ПРАЗДНИК'}` : 'ОТПУСК';
 
                           return (
                             <div 
                               key={vacation.id}
-                              className="absolute top-0 bottom-0 pointer-events-none z-20 border-x border-red-500/30"
+                              className={`absolute top-0 bottom-0 pointer-events-none z-20 border-x ${borderColor}`}
                               style={{ 
                                 left: leftPos,
                                 width: width,
-                                backgroundImage: 'repeating-linear-gradient(45deg, rgba(239, 68, 68, 0.25), rgba(239, 68, 68, 0.25) 10px, rgba(255, 255, 255, 0.3) 10px, rgba(255, 255, 255, 0.3) 20px)',
+                                backgroundImage: `repeating-linear-gradient(45deg, ${stripesColor}, ${stripesColor} 10px, rgba(255, 255, 255, 0.3) 10px, rgba(255, 255, 255, 0.3) 20px)`,
                               }}
+                              title={isHoliday ? vacation.holidayName : 'Отпуск'}
                             >
-                              <div className="absolute top-0 left-0 right-0 bg-red-500/10 py-0.5 px-2 flex justify-between items-center">
-                                <span className="text-[7px] font-black uppercase tracking-tighter text-red-600">ОТПУСК</span>
+                              <div className={`absolute top-0 left-0 right-0 ${bgColor} py-0.5 px-2 flex justify-between items-center overflow-hidden`}>
+                                <span className={`text-[7px] font-black uppercase tracking-tighter truncate ${textColor}`}>
+                                  {labelText}
+                                </span>
                               </div>
                             </div>
                           );
@@ -4217,7 +4771,7 @@ export default function App() {
               </motion.div>
 
               {/* Today Mark */}
-              {differenceInDays(new Date(), timelineStart) >= 0 && differenceInDays(new Date(), timelineStart) < viewportWeeks * 7 && (
+              {differenceInDays(new Date(), timelineStart) >= 0 && differenceInDays(new Date(), timelineStart) < weeks.length * 7 && (
                 <div 
                   className="absolute top-0 bottom-0 w-px bg-red-500 z-30 pointer-events-none"
                   style={{ 
