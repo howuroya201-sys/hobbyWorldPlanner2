@@ -3732,25 +3732,15 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div 
             onClick={rollDice}
-            className="flex-shrink-0 w-10 h-10 bg-indigo-600 rounded-xl shadow-lg border border-indigo-700/20 flex flex-col overflow-hidden group hover:scale-105 active:scale-95 transition-all cursor-pointer select-none"
+            className="flex-shrink-0 w-11 h-11 flex items-center justify-center cursor-pointer select-none hover:scale-105 active:scale-95 transition-all"
+            title="Кубик"
           >
-            {/* Calendar top part */}
-            <div className="h-3 bg-indigo-800 w-full flex items-center justify-center gap-2">
-              <div className="w-1 h-1 bg-white rounded-full" />
-              <div className="w-1 h-1 bg-white rounded-full" />
-            </div>
-            {/* Calendar body with dice face */}
-            <div className="flex-1 bg-white m-0.5 mt-0 rounded-b-lg flex items-center justify-center relative shadow-inner overflow-hidden">
-              <motion.div 
-                key={diceValue}
-                initial={{ y: 20, opacity: 0, rotate: -10 }}
-                animate={{ y: 0, opacity: 1, rotate: 0 }}
-                transition={{ type: "spring", stiffness: 500, damping: 25 }}
-                className="w-full h-full flex items-center justify-center"
-              >
-                {renderDiceFace(diceValue)}
-              </motion.div>
-            </div>
+            <img 
+              src="/logo.svg" 
+              alt="Logo" 
+              className="w-full h-full object-contain filter drop-shadow-sm" 
+              referrerPolicy="no-referrer"
+            />
           </div>
           <div>
             <div className="flex items-center gap-2">
