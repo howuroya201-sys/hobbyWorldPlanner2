@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Set while a task block is being dragged/resized (see TaskBlock in App.tsx).
+   Prevents text selection and stray drag ghosts from fighting the custom
+   drag interaction while the pointer moves quickly across the page. */
+body.user-is-interacting,
+body.user-is-interacting * {
+  user-select: none !important;
+  cursor: grabbing !important;
+}
+
 .bg-stripe-green {
   background: repeating-linear-gradient(45deg, #10b981, #10b981 10px, #94a3b8 10px, #94a3b8 20px);
 }

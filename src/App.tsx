@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -103,6 +103,22 @@ const getRegulatoryDurationsForWeight = (weightOpt: number | string): Record<str
   else if (ruWeight === '4') dForce['Дизайн и вёрстка'] = 13;
   else if (ruWeight === '5') dForce['Дизайн и вёрстка'] = 17;
   else if (ruWeight === '5Н') dForce['Дизайн и вёрстка'] = 17;
+
+  // Девелопмент:
+  if (ruWeight === '1') dForce['Девелопмент'] = 5;
+  else if (ruWeight === '2') dForce['Девелопмент'] = 13;
+  else if (ruWeight === '3') dForce['Девелопмент'] = 19;
+  else if (ruWeight === '3Н') dForce['Девелопмент'] = 27;
+  else if (ruWeight === '4') dForce['Девелопмент'] = 31;
+  else if (ruWeight === '5') dForce['Девелопмент'] = 34;
+  else if (ruWeight === '5Н') dForce['Девелопмент'] = 52;
+
+  // Арт Продакшн: starts alongside Девелопмент, but must run long enough to
+  // end exactly when Дизайн и вёрстка starts. Редактирование and Дизайн и
+  // вёрстка both end together (see recalculateAllDates), so Дизайн и вёрстка
+  // starts (Редактирование − Дизайн и вёрстка) weeks after Девелопмент ends —
+  // hence Арт Продакшн is always longer than Девелопмент by that same margin.
+  dForce['Арт Продакшн'] = dForce['Девелопмент'] + dForce['Редактирование'] - dForce['Дизайн и вёрстка'];
 
   return dForce;
 };
@@ -318,7 +334,8 @@ const COLORS: Record<TaskColor, string> = {
   lightpink: 'bg-pink-300 border-pink-400 text-pink-950',
 };
 
-const CELL_WIDTH = 80; // width of one week in the grid
+const CELL_WIDTH = 80; // width of one week in the grid (Week zoom level)
+const MONTH_ZOOM_CELL_WIDTH = 26; // width of one week in the grid at the Month zoom level
 const ROW_HEIGHT = 48; // height of a resource row
 
 const DEFAULT_STAGES = [
@@ -749,7 +766,6 @@ const ProjectModal: React.FC<{
   });
   const [excludeFromReleases, setExcludeFromReleases] = useState(initialData?.excludeFromReleases || false);
   const [artDirectorRole, setArtDirectorRole] = useState<'artist' | 'curator'>(initialData?.artDirectorRole || 'artist');
-  const [processType, setProcessType] = useState<'sequential' | 'parallel'>('sequential');
   const [releaseMonth, setReleaseMonth] = useState<number>(new Date().getMonth());
   const [releaseYear, setReleaseYear] = useState<number>(new Date().getFullYear());
   const [planningMode, setPlanningMode] = useState<'release' | 'start'>('release');
@@ -788,80 +804,69 @@ const ProjectModal: React.FC<{
   });
 
   const calculateProjectStartDate = (
-    month: number, 
-    year: number, 
-    type: 'sequential' | 'parallel', 
-    currentDurations: Record<string, number>, 
+    month: number,
+    year: number,
+    currentDurations: Record<string, number>,
     currentWeight: number | string
   ): string => {
     const targetSalesStart = new Date(year, month, 1);
-    
+
     const cDur = projectType === 'mhi' ? 0 : (currentDurations['Концептирование'] || 2);
     const dDur = projectType === 'mhi' ? 0 : (currentDurations['Девелопмент'] || 2);
-    const aDur = projectType === 'mhi' ? 0 : (currentDurations['Арт Продакшн'] || 2);
     const rDur = currentDurations['Редактирование'] || 2;
     const dvDur = currentDurations['Дизайн и вёрстка'] || 2;
     const prodDur = currentDurations['Производство и старт продаж'] || 2;
-    
+
     const numericWeight = getNumericWeight(currentWeight);
     const riskDuration = numericWeight <= 3 ? 28 : 56;
     const prodDurationDays = prodDur * 7;
-    
+
     let daysBeforeSales = 0;
     if (projectType === 'mhi') {
       daysBeforeSales = (rDur + dvDur) * 7 + 14;
-    } else if (type === 'parallel') {
-      const maxParallelWeeks = Math.max(dDur, aDur, rDur, dvDur);
-      daysBeforeSales = (cDur + maxParallelWeeks) * 7 + riskDuration + prodDurationDays;
     } else {
-      const endOffset = cDur + dDur + aDur + rDur + dvDur;
+      const endOffset = cDur + dDur + Math.max(rDur, dvDur);
       daysBeforeSales = endOffset * 7 + riskDuration + prodDurationDays;
     }
-    
+
     const calculatedStart = addDays(targetSalesStart, -daysBeforeSales);
     return format(calculatedStart, 'yyyy-MM-dd');
   };
 
   const getCalculatedReleaseDate = (
     startDateStr: string,
-    type: 'sequential' | 'parallel',
     currentDurations: Record<string, number>,
     currentWeight: number | string
   ): Date => {
     const start = new Date(startDateStr);
-    
+
     const cDur = projectType === 'mhi' ? 0 : (currentDurations['Концептирование'] || 2);
     const dDur = projectType === 'mhi' ? 0 : (currentDurations['Девелопмент'] || 2);
-    const aDur = projectType === 'mhi' ? 0 : (currentDurations['Арт Продакшн'] || 2);
     const rDur = currentDurations['Редактирование'] || 2;
     const dvDur = currentDurations['Дизайн и вёрстка'] || 2;
     const prodDur = currentDurations['Производство и старт продаж'] || 2;
-    
+
     const numericWeight = getNumericWeight(currentWeight);
     const riskDuration = numericWeight <= 3 ? 28 : 56;
     const prodDurationDays = prodDur * 7;
-    
+
     let daysBeforeSales = 0;
     if (projectType === 'mhi') {
       daysBeforeSales = (rDur + dvDur) * 7 + 14;
-    } else if (type === 'parallel') {
-      const maxParallelWeeks = Math.max(dDur, aDur, rDur, dvDur);
-      daysBeforeSales = (cDur + maxParallelWeeks) * 7 + riskDuration + prodDurationDays;
     } else {
-      const endOffset = cDur + dDur + aDur + rDur + dvDur;
+      const endOffset = cDur + dDur + Math.max(rDur, dvDur);
       daysBeforeSales = endOffset * 7 + riskDuration + prodDurationDays;
     }
     return addDays(start, daysBeforeSales);
   };
 
-  // Helper to recalculate all dates based on process type
-  const recalculateAllDates = (baseStart: string, type: 'sequential' | 'parallel', currentDurations: Record<string, number>) => {
+  // Helper to recalculate all dates for the project's stages, in sequence
+  const recalculateAllDates = (baseStart: string, currentDurations: Record<string, number>) => {
     const start = new Date(baseStart);
     const newStageDates: Record<string, string> = {};
-    
+
     const cDur = projectType === 'mhi' ? 0 : (currentDurations['Концептирование'] || 2);
     const dDur = projectType === 'mhi' ? 0 : (currentDurations['Девелопмент'] || 2);
-    const aDur = projectType === 'mhi' ? 0 : (currentDurations['Арт Продакшн'] || 2);
     const rDur = currentDurations['Редактирование'] || 2;
     const dvDur = currentDurations['Дизайн и вёрстка'] || 2;
 
@@ -872,28 +877,20 @@ const ProjectModal: React.FC<{
       newStageDates['Редактирование'] = format(start, 'yyyy-MM-dd');
       newStageDates['Дизайн и вёрстка'] = format(addDays(start, rDur * 7), 'yyyy-MM-dd');
       newStageDates['Производство и старт продаж'] = format(addDays(start, (rDur + dvDur) * 7), 'yyyy-MM-dd');
-    } else if (type === 'parallel') {
-      const maxParallelWeeks = Math.max(dDur, aDur, rDur, dvDur);
-      
+    } else {
+      // Девелопмент and Арт Продакшн both start here. Девелопмент ends at
+      // cDur+dDur, exactly when Редактирование starts (below); Арт Продакшн's
+      // own (longer) regulatory duration — see getRegulatoryDurationsForWeight
+      // — makes it end exactly when Дизайн и вёрстка starts instead.
       newStageDates['Концептирование'] = format(start, 'yyyy-MM-dd');
       newStageDates['Девелопмент'] = format(addDays(start, cDur * 7), 'yyyy-MM-dd');
       newStageDates['Арт Продакшн'] = format(addDays(start, cDur * 7), 'yyyy-MM-dd');
-      
-      // Alignment by end date (ending at cDur + maxParallelWeeks)
-      newStageDates['Редактирование'] = format(addDays(start, (cDur + maxParallelWeeks - rDur) * 7), 'yyyy-MM-dd');
-      newStageDates['Дизайн и вёрстка'] = format(addDays(start, (cDur + maxParallelWeeks - dvDur) * 7), 'yyyy-MM-dd');
-      
-      newStageDates['Производство и старт продаж'] = format(addDays(start, (cDur + maxParallelWeeks) * 7), 'yyyy-MM-dd');
-    } else {
-      newStageDates['Концептирование'] = format(start, 'yyyy-MM-dd');
-      newStageDates['Девелопмент'] = format(addDays(start, cDur * 7), 'yyyy-MM-dd');
-      newStageDates['Арт Продакшн'] = format(addDays(start, (cDur + dDur) * 7), 'yyyy-MM-dd');
-      
-      const endOffset = cDur + dDur + aDur + rDur + dvDur;
-      
+
+      const endOffset = cDur + dDur + Math.max(rDur, dvDur);
+
       newStageDates['Редактирование'] = format(addDays(start, (endOffset - rDur) * 7), 'yyyy-MM-dd');
       newStageDates['Дизайн и вёрстка'] = format(addDays(start, (endOffset - dvDur) * 7), 'yyyy-MM-dd');
-      
+
       newStageDates['Производство и старт продаж'] = format(addDays(start, endOffset * 7), 'yyyy-MM-dd');
     }
     setStageStartDates(newStageDates);
@@ -925,21 +922,7 @@ const ProjectModal: React.FC<{
       setDurations(newDurations);
       setStageStartDates(newStageDates);
 
-      // Infer processType
-      const conceptRes = initialData.resources.find(r => r.role === 'Концептирование');
-      const devRes = initialData.resources.find(r => r.role === 'Девелопмент');
-      if (conceptRes && devRes && conceptRes.tasks[0] && devRes.tasks[0]) {
-        const artRes = initialData.resources.find(r => r.role === 'Арт Продакшн');
-        if (artRes && artRes.tasks[0] && new Date(devRes.tasks[0].startDate).getTime() === new Date(artRes.tasks[0].startDate).getTime()) {
-          setProcessType('parallel');
-        } else {
-          setProcessType('sequential');
-        }
-      } else {
-        setProcessType('sequential');
-      }
-
-      const startS = initialData.resources[0]?.tasks[0] 
+      const startS = initialData.resources[0]?.tasks[0]
         ? format(new Date(initialData.resources[0].tasks[0].startDate), 'yyyy-MM-dd')
         : format(new Date(), 'yyyy-MM-dd');
       setProjectStartDate(startS);
@@ -971,8 +954,7 @@ const ProjectModal: React.FC<{
       setSegment('детская');
       setShouldRegenerateTasks(true);
       setArtDirectorRole('artist');
-      setProcessType('sequential');
-      
+
       const today = new Date();
       setReleaseMonth(today.getMonth());
       setReleaseYear(today.getFullYear());
@@ -984,9 +966,9 @@ const ProjectModal: React.FC<{
       const newDurations = getRegulatoryDurationsForWeight(1);
       setDurations(newDurations);
       
-      const calculatedStart = calculateProjectStartDate(today.getMonth(), today.getFullYear(), 'sequential', newDurations, 1);
+      const calculatedStart = calculateProjectStartDate(today.getMonth(), today.getFullYear(), newDurations, 1);
       setProjectStartDate(calculatedStart);
-      recalculateAllDates(calculatedStart, 'sequential', newDurations);
+      recalculateAllDates(calculatedStart, newDurations);
     }
   }, [initialData, isOpen]);
 
@@ -996,19 +978,19 @@ const ProjectModal: React.FC<{
       const regDurations = getRegulatoryDurationsForWeight(weight);
       setDurations(regDurations);
       if (planningMode === 'release') {
-        const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, regDurations, weight);
+        const startStr = calculateProjectStartDate(releaseMonth, releaseYear, regDurations, weight);
         setProjectStartDate(startStr);
-        recalculateAllDates(startStr, processType, regDurations);
+        recalculateAllDates(startStr, regDurations);
       } else {
         const startStr = format(new Date(startYear, startMonth, 1), 'yyyy-MM-dd');
         setProjectStartDate(startStr);
-        recalculateAllDates(startStr, processType, regDurations);
-        const computedReleaseDate = getCalculatedReleaseDate(startStr, processType, regDurations, weight);
+        recalculateAllDates(startStr, regDurations);
+        const computedReleaseDate = getCalculatedReleaseDate(startStr, regDurations, weight);
         setReleaseMonth(computedReleaseDate.getMonth());
         setReleaseYear(computedReleaseDate.getFullYear());
       }
     }
-  }, [weight, isOpen, initialData, releaseMonth, releaseYear, startMonth, startYear, processType, projectType, planningMode]);
+  }, [weight, isOpen, initialData, releaseMonth, releaseYear, startMonth, startYear, projectType, planningMode]);
 
   // Automatically force task regeneration and date recalculation when projectType changes
   useEffect(() => {
@@ -1017,7 +999,7 @@ const ProjectModal: React.FC<{
       if (initialData) {
         // If editing, recalculate start dates based on existing project state but with new type logic
         const startStr = projectStartDate;
-        recalculateAllDates(startStr, processType, durations);
+        recalculateAllDates(startStr, durations);
       }
     }
   }, [projectType, isOpen]);
@@ -1169,6 +1151,30 @@ const ProjectModal: React.FC<{
               color: 'gray',
               status: salesTask?.status || 'neutral'
             });
+          } else if (stage === 'Концептирование' && getNumericWeight(weight) >= 2) {
+            // Weight ≥2 projects revisit Концептирование a second time,
+            // ~1 month (4 weeks) after Девелопмент starts, per the studio's
+            // regulatory schedule — in addition to the usual pass that ends
+            // right as Девелопмент begins.
+            const existingConceptTasks = existingResource?.tasks.filter(t => !t.isRisk && !t.isDelay) || [];
+            const devStart = new Date(stageStartDates['Девелопмент'] || projectStartDate);
+
+            tasks.push({
+              id: existingConceptTasks[0]?.id || Math.random().toString(36).substr(2, 9),
+              label: stage,
+              startDate: taskStartDate,
+              duration: durationDays,
+              color: getTaskColor(stage),
+              status: existingConceptTasks[0]?.status || 'neutral'
+            });
+            tasks.push({
+              id: existingConceptTasks[1]?.id || Math.random().toString(36).substr(2, 9),
+              label: stage,
+              startDate: addWeeks(devStart, 4),
+              duration: durationDays,
+              color: getTaskColor(stage),
+              status: existingConceptTasks[1]?.status || 'neutral'
+            });
           } else {
             tasks.push({
               id: existingResource?.tasks.find(t => !t.isRisk && !t.isDelay)?.id || Math.random().toString(36).substr(2, 9),
@@ -1300,9 +1306,9 @@ const ProjectModal: React.FC<{
                         type="button"
                         onClick={() => {
                           setPlanningMode('release');
-                          const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, durations, weight);
+                          const startStr = calculateProjectStartDate(releaseMonth, releaseYear, durations, weight);
                           setProjectStartDate(startStr);
-                          recalculateAllDates(startStr, processType, durations);
+                          recalculateAllDates(startStr, durations);
                         }}
                         className={`flex-1 py-1.5 text-center text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
                           planningMode === 'release'
@@ -1319,8 +1325,8 @@ const ProjectModal: React.FC<{
                           const d = new Date(projectStartDate);
                           setStartMonth(d.getMonth());
                           setStartYear(d.getFullYear());
-                          recalculateAllDates(projectStartDate, processType, durations);
-                          const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, processType, durations, weight);
+                          recalculateAllDates(projectStartDate, durations);
+                          const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, durations, weight);
                           setReleaseMonth(computedReleaseDate.getMonth());
                           setReleaseYear(computedReleaseDate.getFullYear());
                         }}
@@ -1347,9 +1353,9 @@ const ProjectModal: React.FC<{
                           onChange={(e) => {
                             const newMonth = Number(e.target.value);
                             setReleaseMonth(newMonth);
-                            const startStr = calculateProjectStartDate(newMonth, releaseYear, processType, durations, weight);
+                            const startStr = calculateProjectStartDate(newMonth, releaseYear, durations, weight);
                             setProjectStartDate(startStr);
-                            recalculateAllDates(startStr, processType, durations);
+                            recalculateAllDates(startStr, durations);
                           }}
                         >
                           {MONTH_NAMES.map((name, idx) => (
@@ -1362,9 +1368,9 @@ const ProjectModal: React.FC<{
                           onChange={(e) => {
                             const newYear = Number(e.target.value);
                             setReleaseYear(newYear);
-                            const startStr = calculateProjectStartDate(releaseMonth, newYear, processType, durations, weight);
+                            const startStr = calculateProjectStartDate(releaseMonth, newYear, durations, weight);
                             setProjectStartDate(startStr);
-                            recalculateAllDates(startStr, processType, durations);
+                            recalculateAllDates(startStr, durations);
                           }}
                         >
                           {Array.from({ length: 8 }, (_, i) => 2025 + i).map(yr => (
@@ -1385,9 +1391,9 @@ const ProjectModal: React.FC<{
                             setStartMonth(newMonth);
                             const startStr = format(new Date(startYear, newMonth, 1), 'yyyy-MM-dd');
                             setProjectStartDate(startStr);
-                            recalculateAllDates(startStr, processType, durations);
+                            recalculateAllDates(startStr, durations);
                             
-                            const computedReleaseDate = getCalculatedReleaseDate(startStr, processType, durations, weight);
+                            const computedReleaseDate = getCalculatedReleaseDate(startStr, durations, weight);
                             setReleaseMonth(computedReleaseDate.getMonth());
                             setReleaseYear(computedReleaseDate.getFullYear());
                           }}
@@ -1404,9 +1410,9 @@ const ProjectModal: React.FC<{
                             setStartYear(newYear);
                             const startStr = format(new Date(newYear, startMonth, 1), 'yyyy-MM-dd');
                             setProjectStartDate(startStr);
-                            recalculateAllDates(startStr, processType, durations);
+                            recalculateAllDates(startStr, durations);
                             
-                            const computedReleaseDate = getCalculatedReleaseDate(startStr, processType, durations, weight);
+                            const computedReleaseDate = getCalculatedReleaseDate(startStr, durations, weight);
                             setReleaseMonth(computedReleaseDate.getMonth());
                             setReleaseYear(computedReleaseDate.getFullYear());
                           }}
@@ -1474,57 +1480,6 @@ const ProjectModal: React.FC<{
                     <EyeOff size={14} className={excludeFromReleases ? 'animate-pulse' : ''} />
                     <span>{excludeFromReleases ? 'Исключено из релизов' : 'Отображать в релизах'}</span>
                   </button>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Тип процесса</label>
-                  <div className="flex p-1 bg-white border border-slate-200 rounded-xl">
-                     <button
-                      type="button"
-                      onClick={() => {
-                        setProcessType('sequential');
-                        if (planningMode === 'release') {
-                          const startStr = calculateProjectStartDate(releaseMonth, releaseYear, 'sequential', durations, weight);
-                          setProjectStartDate(startStr);
-                          recalculateAllDates(startStr, 'sequential', durations);
-                        } else {
-                          recalculateAllDates(projectStartDate, 'sequential', durations);
-                          const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, 'sequential', durations, weight);
-                          setReleaseMonth(computedReleaseDate.getMonth());
-                          setReleaseYear(computedReleaseDate.getFullYear());
-                        }
-                      }}
-                      className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
-                        processType === 'sequential' 
-                          ? 'bg-indigo-600 text-white shadow-sm' 
-                          : 'text-slate-400 hover:text-slate-600'
-                      }`}
-                    >
-                      Последовательный
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setProcessType('parallel');
-                        if (planningMode === 'release') {
-                          const startStr = calculateProjectStartDate(releaseMonth, releaseYear, 'parallel', durations, weight);
-                          setProjectStartDate(startStr);
-                          recalculateAllDates(startStr, 'parallel', durations);
-                        } else {
-                          recalculateAllDates(projectStartDate, 'parallel', durations);
-                          const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, 'parallel', durations, weight);
-                          setReleaseMonth(computedReleaseDate.getMonth());
-                          setReleaseYear(computedReleaseDate.getFullYear());
-                        }
-                      }}
-                      className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
-                        processType === 'parallel' 
-                          ? 'bg-indigo-600 text-white shadow-sm' 
-                          : 'text-slate-400 hover:text-slate-600'
-                      }`}
-                    >
-                      Параллельный
-                    </button>
-                  </div>
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 font-black text-indigo-600">Обложка проекта (макс. 3МБ)</label>
@@ -1672,7 +1627,7 @@ const ProjectModal: React.FC<{
                     onClick={() => {
                       const regDurations = getRegulatoryDurationsForWeight(weight);
                       setDurations(regDurations);
-                      recalculateAllDates(projectStartDate, processType, regDurations);
+                      recalculateAllDates(projectStartDate, regDurations);
                       setShouldRegenerateTasks(true);
                     }}
                     className="text-[10px] font-black uppercase tracking-wider text-indigo-600 hover:text-indigo-800 bg-indigo-55/60 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1.5 rounded-lg transition-all shadow-sm"
@@ -1736,12 +1691,12 @@ const ProjectModal: React.FC<{
                               const newDurations = { ...durations, [stage]: val };
                               setDurations(newDurations);
                               if (planningMode === 'release') {
-                                const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, newDurations, weight);
+                                const startStr = calculateProjectStartDate(releaseMonth, releaseYear, newDurations, weight);
                                 setProjectStartDate(startStr);
-                                recalculateAllDates(startStr, processType, newDurations);
+                                recalculateAllDates(startStr, newDurations);
                               } else {
-                                recalculateAllDates(projectStartDate, processType, newDurations);
-                                const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, processType, newDurations, weight);
+                                recalculateAllDates(projectStartDate, newDurations);
+                                const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, newDurations, weight);
                                 setReleaseMonth(computedReleaseDate.getMonth());
                                 setReleaseYear(computedReleaseDate.getFullYear());
                               }
@@ -1816,12 +1771,12 @@ const ProjectModal: React.FC<{
                             const newDurations = { ...durations, ['Производство и старт продаж']: val };
                             setDurations(newDurations);
                             if (planningMode === 'release') {
-                              const startStr = calculateProjectStartDate(releaseMonth, releaseYear, processType, newDurations, weight);
+                              const startStr = calculateProjectStartDate(releaseMonth, releaseYear, newDurations, weight);
                               setProjectStartDate(startStr);
-                              recalculateAllDates(startStr, processType, newDurations);
+                              recalculateAllDates(startStr, newDurations);
                             } else {
-                              recalculateAllDates(projectStartDate, processType, newDurations);
-                              const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, processType, newDurations, weight);
+                              recalculateAllDates(projectStartDate, newDurations);
+                              const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, newDurations, weight);
                               setReleaseMonth(computedReleaseDate.getMonth());
                               setReleaseYear(computedReleaseDate.getFullYear());
                             }
@@ -1885,19 +1840,20 @@ const ProjectModal: React.FC<{
   );
 };
 
-const TaskBlock: React.FC<{ 
-  task: Task; 
+const TaskBlock: React.FC<{
+  task: Task;
   onUpdate: (updates: Partial<Task>) => void;
   onDelete: () => void;
   timelineStart: Date;
+  cellWidth?: number;
   lane?: number;
   isFocused?: boolean;
   isReadOnly?: boolean;
   projectWeight?: number | string;
   role?: string;
-}> = ({ task, onUpdate, onDelete, timelineStart, lane = 0, isFocused = false, isReadOnly = false, projectWeight, role }) => {
-  const left = (differenceInDays(task.startDate, timelineStart) / 7) * CELL_WIDTH;
-  const width = (task.duration / 7) * CELL_WIDTH;
+}> = ({ task, onUpdate, onDelete, timelineStart, cellWidth = CELL_WIDTH, lane = 0, isFocused = false, isReadOnly = false, projectWeight, role }) => {
+  const left = (differenceInDays(task.startDate, timelineStart) / 7) * cellWidth;
+  const width = (task.duration / 7) * cellWidth;
   const top = lane * ROW_HEIGHT + 4;
   const height = ROW_HEIGHT - 8;
 
@@ -1922,66 +1878,89 @@ const TaskBlock: React.FC<{
   const [isDragging, setIsDragging] = useState(false);
   const [isResizingRight, setIsResizingRight] = useState(false);
   const [isResizingLeft, setIsResizingLeft] = useState(false);
-  const [startX, setStartX] = useState(0);
+  // Raw pixel offset from the pointer's position at drag start, updated every frame
+  // for a 1:1 visual follow. The task itself is only committed (snapped to a
+  // whole week) once, on mouseup — see the comment on handleMouseUp below.
+  const [pixelDelta, setPixelDelta] = useState(0);
   const [isEditing, setIsEditing] = useState(false);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [tempLabel, setTempLabel] = useState(task.label);
 
+  const startXRef = useRef(0);
+  const latestClientXRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
+
   const handleMouseDown = (e: React.MouseEvent) => {
     if (isEditing || isReadOnly) return;
+    startXRef.current = e.clientX;
+    setPixelDelta(0);
     setIsDragging(true);
-    setStartX(e.clientX);
     e.stopPropagation();
   };
 
   const handleResizeRightMouseDown = (e: React.MouseEvent) => {
     if (isReadOnly) return;
+    startXRef.current = e.clientX;
+    setPixelDelta(0);
     setIsResizingRight(true);
-    setStartX(e.clientX);
     e.stopPropagation();
   };
 
   const handleResizeLeftMouseDown = (e: React.MouseEvent) => {
     if (isReadOnly) return;
+    startXRef.current = e.clientX;
+    setPixelDelta(0);
     setIsResizingLeft(true);
-    setStartX(e.clientX);
     e.stopPropagation();
   };
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging && !isResizingRight && !isResizingLeft) return;
-      
-      const totalDeltaX = e.clientX - startX;
-      const weeksMoved = Math.round(totalDeltaX / CELL_WIDTH);
-      
-      if (weeksMoved !== 0) {
-        if (isDragging) {
-          onUpdate({ startDate: addWeeks(task.startDate, weeksMoved) });
-          setStartX(prev => prev + weeksMoved * CELL_WIDTH);
-        } else if (isResizingRight) {
-          const newDuration = Math.max(7, task.duration + weeksMoved * 7);
-          if (newDuration !== task.duration) {
-            onUpdate({ duration: newDuration });
-            setStartX(prev => prev + (newDuration - task.duration) / 7 * CELL_WIDTH);
-          }
-        } else if (isResizingLeft) {
-          const newDuration = Math.max(7, task.duration - weeksMoved * 7);
-          if (newDuration !== task.duration) {
-            onUpdate({ 
-              startDate: addWeeks(task.startDate, weeksMoved),
-              duration: newDuration 
-            });
-            setStartX(prev => prev + weeksMoved * CELL_WIDTH);
-          }
-        }
-      }
+
+      // Throttle to one state update per animation frame instead of once per
+      // mousemove event — keeps the drag smooth even with high-poll-rate mice.
+      latestClientXRef.current = e.clientX;
+      if (rafRef.current !== null) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        setPixelDelta(latestClientXRef.current - startXRef.current);
+      });
     };
 
+    // Commit the drag/resize exactly once, on release: snap the accumulated
+    // pixel offset to whole weeks and fire a single onUpdate. Doing this only
+    // here (instead of on every mousemove) avoids re-triggering the lane
+    // reassignment for every task of this resource mid-drag, which is what
+    // caused other tasks to visibly jump around while dragging.
     const handleMouseUp = () => {
+      if (isDragging) {
+        const weeksMoved = Math.round(pixelDelta / cellWidth);
+        if (weeksMoved !== 0) {
+          onUpdate({ startDate: addWeeks(task.startDate, weeksMoved) });
+        }
+      } else if (isResizingRight) {
+        const weeksMoved = Math.round(pixelDelta / cellWidth);
+        const newDuration = Math.max(7, task.duration + weeksMoved * 7);
+        if (newDuration !== task.duration) {
+          onUpdate({ duration: newDuration });
+        }
+      } else if (isResizingLeft) {
+        const weeksMoved = Math.round(pixelDelta / cellWidth);
+        const newDuration = Math.max(7, task.duration - weeksMoved * 7);
+        const actualWeeksMoved = (task.duration - newDuration) / 7;
+        if (actualWeeksMoved !== 0) {
+          onUpdate({
+            startDate: addWeeks(task.startDate, actualWeeksMoved),
+            duration: newDuration
+          });
+        }
+      }
+
       setIsDragging(false);
       setIsResizingRight(false);
       setIsResizingLeft(false);
+      setPixelDelta(0);
     };
 
     if (isDragging || isResizingRight || isResizingLeft) {
@@ -1999,8 +1978,31 @@ const TaskBlock: React.FC<{
       document.body.classList.remove('user-is-interacting');
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
     };
-  }, [isDragging, isResizingRight, isResizingLeft, startX, task.startDate, task.duration, onUpdate]);
+  }, [isDragging, isResizingRight, isResizingLeft, pixelDelta, task.startDate, task.duration, onUpdate, cellWidth]);
+
+  // Live preview position while dragging/resizing: follows the pointer
+  // pixel-for-pixel (unsnapped) so the motion feels smooth; the actual task
+  // dates only get snapped to whole weeks when the drag is committed above.
+  const minWidthPx = cellWidth;
+  let previewLeft = left;
+  let previewWidth = width;
+  if (isDragging) {
+    previewLeft = left + pixelDelta;
+  } else if (isResizingRight) {
+    const clampedDelta = Math.max(pixelDelta, minWidthPx - width);
+    previewWidth = width + clampedDelta;
+  } else if (isResizingLeft) {
+    const clampedDelta = Math.min(pixelDelta, width - minWidthPx);
+    previewLeft = left + clampedDelta;
+    previewWidth = width - clampedDelta;
+  }
+
+  const isInteracting = isDragging || isResizingRight || isResizingLeft;
 
   const handleLabelSubmit = () => {
     onUpdate({ label: tempLabel });
@@ -2011,20 +2013,20 @@ const TaskBlock: React.FC<{
     <motion.div
       layoutId={task.id}
       initial={false}
-      animate={{ 
-        left, 
-        width, 
-        top, 
+      animate={{
+        left: previewLeft,
+        width: previewWidth,
+        top,
         height,
         scale: isDragging ? 1.02 : (isFocused ? 1.25 : 1),
-        boxShadow: isDragging 
-          ? "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)" 
+        boxShadow: isDragging
+          ? "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)"
           : "0 1px 2px 0 rgb(0 0 0 / 0.05)",
         zIndex: isDragging ? 3000 : (showStatusMenu ? 2500 : (isFocused ? 2000 : 10))
       }}
-      transition={{ 
-        type: "spring", 
-        stiffness: 400, 
+      transition={isInteracting ? { duration: 0 } : {
+        type: "spring",
+        stiffness: 400,
         damping: 30,
         mass: 0.8
       }}
@@ -2701,7 +2703,9 @@ export default function App() {
   }[]>([]);
 
   const [currentDate, setCurrentDate] = useState(new Date(2026, 0, 1));
-  const [viewportWeeks, setViewportWeeks] = useState(104); 
+  const [viewportWeeks, setViewportWeeks] = useState(104);
+  const [zoomLevel, setZoomLevel] = useState<'week' | 'month'>('week');
+  const cellWidth = zoomLevel === 'month' ? MONTH_ZOOM_CELL_WIDTH : CELL_WIDTH;
   const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -2859,8 +2863,12 @@ export default function App() {
   }, [isLoading, projects, users, modalMode, editingProjectId, editingUserId, reassigning, delayConfirmation]);
 
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
+  const appRootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Date under the viewport's horizontal center at the moment the zoom level
+  // is switched, so the change in cellWidth doesn't shift what's on screen.
+  const zoomAnchorDateRef = useRef<Date | null>(null);
 
   const [projectSearch, setProjectSearch] = useState('');
   const [releaseYearFilter, setReleaseYearFilter] = useState<string>('all');
@@ -3196,11 +3204,16 @@ export default function App() {
   }, [timelineStart, viewportWeeks, activeTab, releaseYearFilter, projectYears]);
 
   const months = useMemo(() => {
-    const monthMap: Record<string, { label: string; daysInTimeline: number }> = {};
+    const monthMap: Record<string, { monthName: string; year: string; daysInTimeline: number }> = {};
     weeks.forEach(weekStart => {
       const key = format(weekStart, 'LLLL yyyy', { locale: ru });
       if (!monthMap[key]) {
-        monthMap[key] = { label: key.charAt(0).toUpperCase() + key.slice(1), daysInTimeline: 0 };
+        const monthName = format(weekStart, 'LLLL', { locale: ru });
+        monthMap[key] = {
+          monthName: monthName.charAt(0).toUpperCase() + monthName.slice(1),
+          year: format(weekStart, 'yyyy'),
+          daysInTimeline: 0
+        };
       }
       monthMap[key].daysInTimeline += 7;
     });
@@ -3215,13 +3228,45 @@ export default function App() {
         const weeksFromStart = Math.floor(differenceInDays(today, timelineStart) / 7);
         if (weeksFromStart < weeks.length) {
           scrollContainerRef.current.scrollTo({
-            left: weeksFromStart * CELL_WIDTH,
+            left: weeksFromStart * cellWidth,
             behavior
           });
         }
       }
     }
   };
+
+  const handleZoomLevelChange = (next: 'week' | 'month') => {
+    if (next === zoomLevel) return;
+    const container = scrollContainerRef.current;
+    if (container) {
+      const centerX = container.scrollLeft + container.clientWidth / 2;
+      const weeksFromStart = centerX / cellWidth;
+      zoomAnchorDateRef.current = addDays(timelineStart, weeksFromStart * 7);
+    }
+    setZoomLevel(next);
+  };
+
+  // Re-center the timeline on the anchor date recorded above, using the new
+  // cellWidth. Runs before paint so the switch doesn't flash the old scroll
+  // position at the new zoom level.
+  useLayoutEffect(() => {
+    // The row/column layout animations touched off by a cellWidth change can
+    // leave the outer app shell (which should never scroll horizontally —
+    // only scrollContainerRef's inner Gantt does) with a stray scrollLeft.
+    // Force it back before paint so the switch never visibly shifts the page.
+    if (appRootRef.current) {
+      appRootRef.current.scrollLeft = 0;
+    }
+
+    const container = scrollContainerRef.current;
+    const anchorDate = zoomAnchorDateRef.current;
+    if (container && anchorDate) {
+      const weeksFromStart = differenceInDays(anchorDate, timelineStart) / 7;
+      container.scrollLeft = weeksFromStart * cellWidth - container.clientWidth / 2;
+    }
+    zoomAnchorDateRef.current = null;
+  }, [zoomLevel]);
 
   useEffect(() => {
     const scrollInstant = () => scrollToToday('auto');
@@ -3581,7 +3626,7 @@ export default function App() {
 
       // Horizontal positioning
       const weeksFromStart = differenceInDays(freshTask.startDate, timelineStart) / 7;
-      const horizontalScroll = weeksFromStart * CELL_WIDTH;
+      const horizontalScroll = weeksFromStart * cellWidth;
 
       // Vertical positioning
       let verticalOffset = 0;
@@ -3600,7 +3645,7 @@ export default function App() {
         const viewportWidth = scrollContainerRef.current.clientWidth;
         const viewportHeight = scrollContainerRef.current.clientHeight;
         const sidebarWidth = 464; // Approx width of both sidebar columns
-        const taskWidth = (freshTask.duration / 7) * CELL_WIDTH;
+        const taskWidth = (freshTask.duration / 7) * cellWidth;
 
         // Try to center task in the visible area
         const scrollLeft = horizontalScroll - ((viewportWidth - sidebarWidth) / 2) + (taskWidth / 2);
@@ -3614,7 +3659,7 @@ export default function App() {
         });
       }
     }
-  }, [reviewIndex, reviewTasks, projects, sortedProjects, timelineStart, activeTab]);
+  }, [reviewIndex, reviewTasks, projects, sortedProjects, timelineStart, activeTab, cellWidth]);
 
   if (isLoading) {
     return (
@@ -3669,7 +3714,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden relative">
+    <div ref={appRootRef} className="flex flex-col h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden relative">
       {!isAuthenticated && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-900/95 backdrop-blur-md">
           <motion.div 
@@ -3781,13 +3826,32 @@ export default function App() {
             <span className="hidden lg:inline">Режим проверки</span>
           </button>
 
-          <button 
+          <button
             onClick={scrollToToday}
             className="p-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg transition-all shadow-sm h-[38px]"
             title="Перейти к сегодняшнему числу"
           >
             <Calendar size={18} className="text-indigo-600" />
           </button>
+
+          <div className="flex items-center bg-slate-100 p-1 rounded-lg gap-1 h-[38px]" title="Масштаб календаря">
+            <button
+              onClick={() => handleZoomLevelChange('week')}
+              className={`px-3 h-full rounded-md text-xs font-bold transition-all ${
+                zoomLevel === 'week' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Недели
+            </button>
+            <button
+              onClick={() => handleZoomLevelChange('month')}
+              className={`px-3 h-full rounded-md text-xs font-bold transition-all ${
+                zoomLevel === 'month' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Месяцы
+            </button>
+          </div>
 
           {isProjectTab && (
             <button 
@@ -4046,23 +4110,29 @@ export default function App() {
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
                                 <div className="flex items-center gap-1">
                               <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">Вес:</span>
-                              {!isReadOnly && (
-                                <div className="flex items-center gap-0.5 ml-0.5 mr-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                  <button 
-                                    onClick={(e) => { e.stopPropagation(); updateProjectWeight(project.id, -1); }}
-                                    className="w-4 h-4 flex items-center justify-center bg-white border border-slate-200 rounded text-slate-400 hover:text-red-600 hover:border-red-200 transition-colors"
-                                  >
-                                    <Minus size={10} strokeWidth={3} />
-                                  </button>
-                                  <button 
-                                    onClick={(e) => { e.stopPropagation(); updateProjectWeight(project.id, 1); }}
-                                    className="w-4 h-4 flex items-center justify-center bg-white border border-slate-200 rounded text-slate-400 hover:text-green-600 hover:border-green-200 transition-colors"
-                                  >
-                                    <Plus size={10} strokeWidth={3} />
-                                  </button>
-                                </div>
+                              {project.isMhi ? (
+                                <span className="font-mono font-bold text-slate-400 text-[10px]">—</span>
+                              ) : (
+                                <>
+                                  {!isReadOnly && (
+                                    <div className="flex items-center gap-0.5 ml-0.5 mr-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); updateProjectWeight(project.id, -1); }}
+                                        className="w-4 h-4 flex items-center justify-center bg-white border border-slate-200 rounded text-slate-400 hover:text-red-600 hover:border-red-200 transition-colors"
+                                      >
+                                        <Minus size={10} strokeWidth={3} />
+                                      </button>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); updateProjectWeight(project.id, 1); }}
+                                        className="w-4 h-4 flex items-center justify-center bg-white border border-slate-200 rounded text-slate-400 hover:text-green-600 hover:border-green-200 transition-colors"
+                                      >
+                                        <Plus size={10} strokeWidth={3} />
+                                      </button>
+                                    </div>
+                                  )}
+                                  <span className="font-mono font-bold text-slate-700 text-[10px]">{project.weight}</span>
+                                </>
                               )}
-                              <span className="font-mono font-bold text-slate-700 text-[10px]">{project.weight}</span>
                             </div>
                             <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">Выход: <span className="font-bold text-indigo-600">
                               {(() => {
@@ -4540,42 +4610,48 @@ export default function App() {
             {/* Timeline Header */}
             <div className="sticky top-0 z-30 bg-white border-b-2 border-slate-400 h-20">
               {/* Months */}
-              <div className="flex h-10">
+              <div className={zoomLevel === 'month' ? 'flex h-20' : 'flex h-10'}>
                 {months.map((month, idx) => (
-                  <div 
-                    key={idx} 
-                    style={{ width: (month.daysInTimeline / 7) * CELL_WIDTH }}
-                    className="flex-shrink-0 border-r border-slate-400 flex items-center justify-center text-[11px] font-bold uppercase tracking-widest text-slate-500 bg-white"
+                  <div
+                    key={idx}
+                    style={{ width: (month.daysInTimeline / 7) * cellWidth }}
+                    className={`flex-shrink-0 border-r border-slate-400 flex flex-col items-center justify-center leading-tight font-bold uppercase tracking-widest text-slate-500 bg-white ${
+                      zoomLevel === 'month' ? 'text-[13px]' : 'text-[11px]'
+                    }`}
                   >
-                    {month.label}
+                    <span>{month.monthName}</span>
+                    <span>{month.year}</span>
                   </div>
                 ))}
               </div>
-              {/* Weeks */}
-              <div className="flex h-10 border-t border-slate-100 overflow-hidden">
-                {weeks.map((weekStart, idx) => {
-                  const endOfWeekDate = addDays(weekStart, 6);
-                  const isCurrentWeek = new Date() >= weekStart && new Date() < addDays(weekStart, 7);
-                  const isEndOfMonth = idx < weeks.length - 1 && weeks[idx + 1].getMonth() !== weekStart.getMonth();
-                  
-                  return (
-                    <div 
-                      key={idx} 
-                      style={{ width: CELL_WIDTH }} 
-                      className={`flex-shrink-0 border-r overflow-hidden flex flex-col items-center justify-center transition-colors ${
-                        isEndOfMonth ? 'border-r-slate-400' : 'border-slate-100'
-                      } ${isCurrentWeek ? 'bg-indigo-50' : 'bg-white'}`}
-                    >
-                      <span className={`text-[9px] font-medium uppercase ${isCurrentWeek ? 'text-indigo-600' : 'text-slate-400'}`}>
-                        Н{format(weekStart, 'w', { locale: ru })}
-                      </span>
-                      <span className={`text-[10px] font-bold ${isCurrentWeek ? 'text-indigo-700' : 'text-slate-700'}`}>
-                        {format(weekStart, 'd')}—{format(endOfWeekDate, 'd')}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+              {/* Weeks (collapsed to plain gridlines at the Month zoom level, since
+                  per-week labels have no room once cellWidth shrinks that far) */}
+              {zoomLevel === 'week' && (
+                <div className="flex h-10 border-t border-slate-100 overflow-hidden">
+                  {weeks.map((weekStart, idx) => {
+                    const endOfWeekDate = addDays(weekStart, 6);
+                    const isCurrentWeek = new Date() >= weekStart && new Date() < addDays(weekStart, 7);
+                    const isEndOfMonth = idx < weeks.length - 1 && weeks[idx + 1].getMonth() !== weekStart.getMonth();
+
+                    return (
+                      <div
+                        key={idx}
+                        style={{ width: cellWidth }}
+                        className={`flex-shrink-0 border-r overflow-hidden flex flex-col items-center justify-center transition-colors ${
+                          isEndOfMonth ? 'border-r-slate-400' : 'border-slate-100'
+                        } ${isCurrentWeek ? 'bg-indigo-50' : 'bg-white'}`}
+                      >
+                        <span className={`text-[9px] font-medium uppercase ${isCurrentWeek ? 'text-indigo-600' : 'text-slate-400'}`}>
+                          Н{format(weekStart, 'w', { locale: ru })}
+                        </span>
+                        <span className={`text-[10px] font-bold ${isCurrentWeek ? 'text-indigo-700' : 'text-slate-700'}`}>
+                          {format(weekStart, 'd')}—{format(endOfWeekDate, 'd')}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Grid Body */}
@@ -4585,13 +4661,13 @@ export default function App() {
                 {weeks.map((weekStart, idx) => {
                   const isCurrentWeek = new Date() >= weekStart && new Date() < addDays(weekStart, 7);
                   const isEndOfMonth = idx < weeks.length - 1 && weeks[idx + 1].getMonth() !== weekStart.getMonth();
-                  
+
                   return (
-                    <div 
-                      key={idx} 
-                      style={{ width: CELL_WIDTH }} 
+                    <div
+                      key={idx}
+                      style={{ width: cellWidth }}
                       className={`flex-shrink-0 border-r h-full ${
-                        isEndOfMonth ? 'border-r-slate-400' : 'border-slate-100'
+                        isEndOfMonth ? 'border-r-slate-400' : (zoomLevel === 'month' ? 'border-transparent' : 'border-slate-100')
                       } ${isCurrentWeek ? 'bg-indigo-50/30' : ''}`}
                     />
                   );
@@ -4622,8 +4698,9 @@ export default function App() {
                               ...releaseTask, 
                               label: isStartSales ? project.name : `${project.name}: ${releaseTask.label}`,
                               segment: project.segment
-                            }} 
+                            }}
                             timelineStart={timelineStart}
+                            cellWidth={cellWidth}
                             isReadOnly={isReadOnly}
                             onUpdate={(updates) => {
                               if (resourceWithRelease) {
@@ -4669,15 +4746,16 @@ export default function App() {
                             onDoubleClick={(e) => {
                             const rect = e.currentTarget.getBoundingClientRect();
                             const x = e.clientX - rect.left;
-                            const weekIndex = Math.floor(x / CELL_WIDTH);
+                            const weekIndex = Math.floor(x / cellWidth);
                             if (!isReadOnly) addTask(project.id, resource.id, addWeeks(timelineStart, weekIndex));
                           }}
                         >
                           {resource.tasks.map(task => (
                             <TaskBlock 
-                              key={task.id} 
-                              task={task} 
+                              key={task.id}
+                              task={task}
                               timelineStart={timelineStart}
+                              cellWidth={cellWidth}
                               isFocused={reviewIndex !== null && reviewTasks[reviewIndex]?.task.id === task.id}
                               isReadOnly={isReadOnly}
                               onUpdate={(updates) => updateTask(project.id, resource.id, task.id, updates)}
@@ -4707,9 +4785,10 @@ export default function App() {
                       >
                         {tasksForUser.map(({ project, task, projectId, resourceId, lane, projectWeight, role }) => (
                           <TaskBlock 
-                            key={task.id} 
-                            task={{ ...task, label: `${project}: ${task.label}` }} 
+                            key={task.id}
+                            task={{ ...task, label: `${project}: ${task.label}` }}
                             timelineStart={timelineStart}
+                            cellWidth={cellWidth}
                             lane={lane}
                             isFocused={reviewIndex !== null && reviewTasks[reviewIndex]?.task.id === task.id}
                             isReadOnly={isReadOnly}
@@ -4723,10 +4802,10 @@ export default function App() {
                           const start = new Date(vacation.startDate);
                           const end = new Date(vacation.endDate);
                           const duration = differenceInDays(end, start);
-                          const leftPos = (differenceInDays(start, timelineStart) / 7) * CELL_WIDTH;
-                          const width = (duration / 7) * CELL_WIDTH;
-                          
-                          if (leftPos + width < 0 || leftPos > weeks.length * CELL_WIDTH) return null;
+                          const leftPos = (differenceInDays(start, timelineStart) / 7) * cellWidth;
+                          const width = (duration / 7) * cellWidth;
+
+                          if (leftPos + width < 0 || leftPos > weeks.length * cellWidth) return null;
 
                           const isHoliday = vacation.isHoliday || vacation.id.startsWith('ru-holiday');
                           const stripesColor = isHoliday ? 'rgba(99, 102, 241, 0.2)' : 'rgba(239, 68, 68, 0.25)';
@@ -4765,7 +4844,7 @@ export default function App() {
                 <div 
                   className="absolute top-0 bottom-0 w-px bg-red-500 z-30 pointer-events-none"
                   style={{ 
-                    left: (differenceInDays(new Date(), timelineStart) / 7) * CELL_WIDTH,
+                    left: (differenceInDays(new Date(), timelineStart) / 7) * cellWidth,
                     boxShadow: '0 0 8px rgba(239, 68, 68, 0.5)'
                   }}
                 />
