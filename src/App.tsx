@@ -216,6 +216,8 @@ interface Project {
   releaseYear?: number;
   artDirectorRole?: 'artist' | 'curator';
   isCollapsed?: boolean;
+  hasForeignComponents?: boolean;
+  hasSmallBatch?: boolean;
 }
 
 interface User {
@@ -765,6 +767,8 @@ const ProjectModal: React.FC<{
     return 'game';
   });
   const [excludeFromReleases, setExcludeFromReleases] = useState(initialData?.excludeFromReleases || false);
+  const [hasForeignComponents, setHasForeignComponents] = useState(initialData?.hasForeignComponents || false);
+  const [hasSmallBatch, setHasSmallBatch] = useState(initialData?.hasSmallBatch || false);
   const [artDirectorRole, setArtDirectorRole] = useState<'artist' | 'curator'>(initialData?.artDirectorRole || 'artist');
   const [releaseMonth, setReleaseMonth] = useState<number>(new Date().getMonth());
   const [releaseYear, setReleaseYear] = useState<number>(new Date().getFullYear());
@@ -1102,6 +1106,21 @@ const ProjectModal: React.FC<{
           };
         });
       } else {
+        // Дата окончания задачи «Старт продаж», используется ниже для
+        // размещения «Заказ компонентов» (см. stage === 'Концептирование').
+        // Считается той же цепочкой, что и сама задача «Старт продаж» внутри
+        // специальной строки «Производство и старт продаж» ниже.
+        const prodStageStart = stageStartDates['Производство и старт продаж']
+          ? new Date(stageStartDates['Производство и старт продаж'])
+          : new Date(projectStartDate);
+        const riskDurationForSales = getNumericWeight(weight) <= 3 ? 28 : 56;
+        const prodDurationDaysForSales = (durations['Производство и старт продаж'] || 2) * 7;
+        // Same moment the «ПРОИЗВОДСТВО» task itself starts (right after risks) —
+        // used below for «Заказ мелкотиражки».
+        const productionStartDate = addDays(prodStageStart, riskDurationForSales);
+        const salesStartDate = addDays(productionStartDate, prodDurationDaysForSales);
+        const salesEndDate = addDays(salesStartDate, 14);
+
         // Regenerate resources and tasks
         finalResources = [...DEFAULT_STAGES, 'Производство и старт продаж'].map(stage => {
           const isSpecial = stage === 'Производство и старт продаж';
@@ -1186,6 +1205,35 @@ const ProjectModal: React.FC<{
             });
           }
 
+          // «Зарубежные компоненты»: продюсер (тот же человек, что ведёт
+          // Концептирование) получает задачу «Заказ компонентов» — 2 недели,
+          // стартующие за 6 месяцев до окончания «Старт продаж».
+          if (stage === 'Концептирование' && hasForeignComponents) {
+            const existingOrderTask = existingResource?.tasks.find(t => t.label === 'Заказ компонентов');
+            tasks.push({
+              id: existingOrderTask?.id || Math.random().toString(36).substr(2, 9),
+              label: 'Заказ компонентов',
+              startDate: addMonths(salesEndDate, -6),
+              duration: 14,
+              color: getTaskColor(stage),
+              status: existingOrderTask?.status || 'neutral'
+            });
+          }
+
+          // «Мелкотиражка»: задача «Заказ мелкотиражки» — 2 недели, стартует
+          // одновременно с задачей «ПРОИЗВОДСТВО», в строке Концептирование.
+          if (stage === 'Концептирование' && hasSmallBatch) {
+            const existingBatchTask = existingResource?.tasks.find(t => t.label === 'Заказ мелкотиражки');
+            tasks.push({
+              id: existingBatchTask?.id || Math.random().toString(36).substr(2, 9),
+              label: 'Заказ мелкотиражки',
+              startDate: productionStartDate,
+              duration: 14,
+              color: getTaskColor(stage),
+              status: existingBatchTask?.status || 'neutral'
+            });
+          }
+
           return {
             id: existingResource?.id || Math.random().toString(36).substr(2, 9),
             role: stage,
@@ -1240,6 +1288,8 @@ const ProjectModal: React.FC<{
         isMhi: projectType === 'mhi',
         excludeFromReleases,
         artDirectorRole,
+        hasForeignComponents,
+        hasSmallBatch,
         sortOrder: initialData?.sortOrder ?? 0
       };
 
@@ -1480,6 +1530,43 @@ const ProjectModal: React.FC<{
                     <EyeOff size={14} className={excludeFromReleases ? 'animate-pulse' : ''} />
                     <span>{excludeFromReleases ? 'Исключено из релизов' : 'Отображать в релизах'}</span>
                   </button>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Компоненты</label>
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHasForeignComponents(!hasForeignComponents);
+                        setShouldRegenerateTasks(true);
+                      }}
+                      className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all border-2 ${
+                        hasForeignComponents
+                          ? 'bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner'
+                          : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-200 hover:bg-slate-50'
+                      }`}
+                      title="Если включено, продюсеру автоматически создаётся задача «Заказ компонентов» за 6 месяцев до старта продаж"
+                    >
+                      <Cpu size={14} />
+                      <span>Зарубежные компоненты</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHasSmallBatch(!hasSmallBatch);
+                        setShouldRegenerateTasks(true);
+                      }}
+                      className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all border-2 ${
+                        hasSmallBatch
+                          ? 'bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner'
+                          : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-200 hover:bg-slate-50'
+                      }`}
+                      title="Если включено, продюсеру автоматически создаётся задача «Заказ мелкотиражки» одновременно с началом «ПРОИЗВОДСТВО»"
+                    >
+                      <Layers size={14} />
+                      <span>Мелкотиражка</span>
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5 font-black text-indigo-600">Обложка проекта (макс. 3МБ)</label>
@@ -2691,7 +2778,7 @@ export default function App() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<string>('projects_2026');
+  const [activeTab, setActiveTab] = useState<string>('projects');
   const [userRoleFilter, setUserRoleFilter] = useState<string>('all');
   
   // Review Tasks Mode State
