@@ -237,7 +237,8 @@ async function startServer() {
                   host,
                   port,
                   database,
-                  ssl: { rejectUnauthorized: false }
+                  ssl: { rejectUnauthorized: false },
+                  connectionTimeoutMillis: 5000
                 });
                 console.log("Database connection pool created using parsed config.");
                 return sharedPool;
@@ -250,9 +251,10 @@ async function startServer() {
       }
 
       // Fallback
-      sharedPool = new pg.Pool({ 
+      sharedPool = new pg.Pool({
         connectionString,
-        ssl: { rejectUnauthorized: false }
+        ssl: { rejectUnauthorized: false },
+        connectionTimeoutMillis: 5000
       });
     }
     return sharedPool;
@@ -266,9 +268,24 @@ async function startServer() {
       return false;
     }
     try {
-      const client = await pool.connect();
-      await client.query("SELECT NOW()");
-      client.release();
+      // Hard app-level deadline on top of connectionTimeoutMillis: some
+      // network conditions (e.g. a black-holed host) can keep the socket
+      // open well past the pg client's own timeout, which would otherwise
+      // hang this check — and with it every request that awaits it,
+      // including /api/db-status that the frontend blocks its loading
+      // screen on — indefinitely.
+      const connectOrTimeout = Promise.race([
+        pool.connect(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Database connection timed out")), 5000)
+        )
+      ]);
+      const client = await connectOrTimeout;
+      try {
+        await client.query("SELECT NOW()");
+      } finally {
+        client.release();
+      }
       isDbConnected = true;
       dbConnectionError = null;
       return true;
