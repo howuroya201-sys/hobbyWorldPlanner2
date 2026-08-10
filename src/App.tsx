@@ -52,7 +52,8 @@ import {
   endOfWeek,
   addWeeks,
   subWeeks,
-  isWithinInterval
+  isWithinInterval,
+  getDaysInMonth
 } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
@@ -338,6 +339,7 @@ const COLORS: Record<TaskColor, string> = {
 
 const CELL_WIDTH = 80; // width of one week in the grid (Week zoom level)
 const MONTH_ZOOM_CELL_WIDTH = 26; // width of one week in the grid at the Month zoom level
+const DAY_ZOOM_CELL_WIDTH = 336; // width of one week in the grid at the Day zoom level (48px/day)
 const ROW_HEIGHT = 48; // height of a resource row
 
 const DEFAULT_STAGES = [
@@ -772,6 +774,7 @@ const ProjectModal: React.FC<{
   const [artDirectorRole, setArtDirectorRole] = useState<'artist' | 'curator'>(initialData?.artDirectorRole || 'artist');
   const [releaseMonth, setReleaseMonth] = useState<number>(new Date().getMonth());
   const [releaseYear, setReleaseYear] = useState<number>(new Date().getFullYear());
+  const [releaseDay, setReleaseDay] = useState<number>(new Date().getDate());
   const [planningMode, setPlanningMode] = useState<'release' | 'start'>('release');
   const [startMonth, setStartMonth] = useState<number>(new Date().getMonth());
   const [startYear, setStartYear] = useState<number>(new Date().getFullYear());
@@ -810,10 +813,11 @@ const ProjectModal: React.FC<{
   const calculateProjectStartDate = (
     month: number,
     year: number,
+    day: number,
     currentDurations: Record<string, number>,
     currentWeight: number | string
   ): string => {
-    const targetSalesStart = new Date(year, month, 1);
+    const targetSalesStart = new Date(year, month, day);
 
     const cDur = projectType === 'mhi' ? 0 : (currentDurations['Концептирование'] || 2);
     const dDur = projectType === 'mhi' ? 0 : (currentDurations['Девелопмент'] || 2);
@@ -945,6 +949,7 @@ const ProjectModal: React.FC<{
       }
       setReleaseMonth(initialSalesDate.getMonth());
       setReleaseYear(initialSalesDate.getFullYear());
+      setReleaseDay(initialSalesDate.getDate());
 
       setAssignments(initialData.resources.reduce((acc, r) => {
         if (!r.isSpecialRow) acc[r.role] = r.name;
@@ -962,15 +967,16 @@ const ProjectModal: React.FC<{
       const today = new Date();
       setReleaseMonth(today.getMonth());
       setReleaseYear(today.getFullYear());
+      setReleaseDay(today.getDate());
       setStartMonth(today.getMonth());
       setStartYear(today.getFullYear());
       setPlanningMode('release');
       setAssignments(DEFAULT_STAGES.reduce((acc, stage) => ({ ...acc, [stage]: '' }), {}));
-      
+
       const newDurations = getRegulatoryDurationsForWeight(1);
       setDurations(newDurations);
-      
-      const calculatedStart = calculateProjectStartDate(today.getMonth(), today.getFullYear(), newDurations, 1);
+
+      const calculatedStart = calculateProjectStartDate(today.getMonth(), today.getFullYear(), today.getDate(), newDurations, 1);
       setProjectStartDate(calculatedStart);
       recalculateAllDates(calculatedStart, newDurations);
     }
@@ -982,7 +988,7 @@ const ProjectModal: React.FC<{
       const regDurations = getRegulatoryDurationsForWeight(weight);
       setDurations(regDurations);
       if (planningMode === 'release') {
-        const startStr = calculateProjectStartDate(releaseMonth, releaseYear, regDurations, weight);
+        const startStr = calculateProjectStartDate(releaseMonth, releaseYear, releaseDay, regDurations, weight);
         setProjectStartDate(startStr);
         recalculateAllDates(startStr, regDurations);
       } else {
@@ -992,21 +998,10 @@ const ProjectModal: React.FC<{
         const computedReleaseDate = getCalculatedReleaseDate(startStr, regDurations, weight);
         setReleaseMonth(computedReleaseDate.getMonth());
         setReleaseYear(computedReleaseDate.getFullYear());
+        setReleaseDay(computedReleaseDate.getDate());
       }
     }
-  }, [weight, isOpen, initialData, releaseMonth, releaseYear, startMonth, startYear, projectType, planningMode]);
-
-  // Automatically force task regeneration and date recalculation when projectType changes
-  useEffect(() => {
-    if (isOpen) {
-      setShouldRegenerateTasks(true);
-      if (initialData) {
-        // If editing, recalculate start dates based on existing project state but with new type logic
-        const startStr = projectStartDate;
-        recalculateAllDates(startStr, durations);
-      }
-    }
-  }, [projectType, isOpen]);
+  }, [weight, isOpen, initialData, releaseMonth, releaseYear, releaseDay, startMonth, startYear, projectType, planningMode]);
 
   const getFilteredUsers = (stage: string) => {
     const requiredRole = STAGE_TO_ROLE[stage];
@@ -1356,7 +1351,7 @@ const ProjectModal: React.FC<{
                         type="button"
                         onClick={() => {
                           setPlanningMode('release');
-                          const startStr = calculateProjectStartDate(releaseMonth, releaseYear, durations, weight);
+                          const startStr = calculateProjectStartDate(releaseMonth, releaseYear, releaseDay, durations, weight);
                           setProjectStartDate(startStr);
                           recalculateAllDates(startStr, durations);
                         }}
@@ -1379,6 +1374,7 @@ const ProjectModal: React.FC<{
                           const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, durations, weight);
                           setReleaseMonth(computedReleaseDate.getMonth());
                           setReleaseYear(computedReleaseDate.getFullYear());
+                          setReleaseDay(computedReleaseDate.getDate());
                         }}
                         className={`flex-1 py-1.5 text-center text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
                           planningMode === 'start'
@@ -1395,15 +1391,32 @@ const ProjectModal: React.FC<{
                 <div>
                   {planningMode === 'release' ? (
                     <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Месяц и год выхода проекта</label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Дата выхода проекта</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <select
+                          className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 font-bold text-slate-700 cursor-pointer text-xs"
+                          value={releaseDay}
+                          onChange={(e) => {
+                            const newDay = Number(e.target.value);
+                            setReleaseDay(newDay);
+                            const startStr = calculateProjectStartDate(releaseMonth, releaseYear, newDay, durations, weight);
+                            setProjectStartDate(startStr);
+                            recalculateAllDates(startStr, durations);
+                          }}
+                        >
+                          {Array.from({ length: getDaysInMonth(new Date(releaseYear, releaseMonth)) }, (_, i) => i + 1).map(d => (
+                            <option key={d} value={d}>{d}</option>
+                          ))}
+                        </select>
                         <select
                           className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-500 font-bold text-slate-700 cursor-pointer text-xs"
                           value={releaseMonth}
                           onChange={(e) => {
                             const newMonth = Number(e.target.value);
+                            const clampedDay = Math.min(releaseDay, getDaysInMonth(new Date(releaseYear, newMonth)));
                             setReleaseMonth(newMonth);
-                            const startStr = calculateProjectStartDate(newMonth, releaseYear, durations, weight);
+                            setReleaseDay(clampedDay);
+                            const startStr = calculateProjectStartDate(newMonth, releaseYear, clampedDay, durations, weight);
                             setProjectStartDate(startStr);
                             recalculateAllDates(startStr, durations);
                           }}
@@ -1417,8 +1430,10 @@ const ProjectModal: React.FC<{
                           value={releaseYear}
                           onChange={(e) => {
                             const newYear = Number(e.target.value);
+                            const clampedDay = Math.min(releaseDay, getDaysInMonth(new Date(newYear, releaseMonth)));
                             setReleaseYear(newYear);
-                            const startStr = calculateProjectStartDate(releaseMonth, newYear, durations, weight);
+                            setReleaseDay(clampedDay);
+                            const startStr = calculateProjectStartDate(releaseMonth, newYear, clampedDay, durations, weight);
                             setProjectStartDate(startStr);
                             recalculateAllDates(startStr, durations);
                           }}
@@ -1446,6 +1461,7 @@ const ProjectModal: React.FC<{
                             const computedReleaseDate = getCalculatedReleaseDate(startStr, durations, weight);
                             setReleaseMonth(computedReleaseDate.getMonth());
                             setReleaseYear(computedReleaseDate.getFullYear());
+                            setReleaseDay(computedReleaseDate.getDate());
                           }}
                         >
                           {MONTH_NAMES.map((name, idx) => (
@@ -1465,6 +1481,7 @@ const ProjectModal: React.FC<{
                             const computedReleaseDate = getCalculatedReleaseDate(startStr, durations, weight);
                             setReleaseMonth(computedReleaseDate.getMonth());
                             setReleaseYear(computedReleaseDate.getFullYear());
+                            setReleaseDay(computedReleaseDate.getDate());
                           }}
                         >
                           {Array.from({ length: 8 }, (_, i) => 2025 + i).map(yr => (
@@ -1480,10 +1497,15 @@ const ProjectModal: React.FC<{
                   <div className="flex bg-white border border-slate-200 p-1 rounded-xl gap-1">
                     <button
                       type="button"
-                      onClick={() => setProjectType('game')}
+                      onClick={() => {
+                        if (projectType === 'game') return;
+                        setProjectType('game');
+                        setShouldRegenerateTasks(true);
+                        if (initialData) recalculateAllDates(projectStartDate, durations);
+                      }}
                       className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-all ${
-                        projectType === 'game' 
-                          ? 'bg-indigo-600 text-white shadow-md' 
+                        projectType === 'game'
+                          ? 'bg-indigo-600 text-white shadow-md'
                           : 'text-slate-500 hover:bg-slate-50'
                       }`}
                     >
@@ -1492,10 +1514,15 @@ const ProjectModal: React.FC<{
                     </button>
                     <button
                       type="button"
-                      onClick={() => setProjectType('prototype')}
+                      onClick={() => {
+                        if (projectType === 'prototype') return;
+                        setProjectType('prototype');
+                        setShouldRegenerateTasks(true);
+                        if (initialData) recalculateAllDates(projectStartDate, durations);
+                      }}
                       className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-all ${
-                        projectType === 'prototype' 
-                          ? 'bg-amber-600 text-white shadow-md' 
+                        projectType === 'prototype'
+                          ? 'bg-amber-600 text-white shadow-md'
                           : 'text-slate-500 hover:bg-slate-50'
                       }`}
                     >
@@ -1504,10 +1531,15 @@ const ProjectModal: React.FC<{
                     </button>
                     <button
                       type="button"
-                      onClick={() => setProjectType('mhi')}
+                      onClick={() => {
+                        if (projectType === 'mhi') return;
+                        setProjectType('mhi');
+                        setShouldRegenerateTasks(true);
+                        if (initialData) recalculateAllDates(projectStartDate, durations);
+                      }}
                       className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-all ${
-                        projectType === 'mhi' 
-                          ? 'bg-purple-600 text-white shadow-md' 
+                        projectType === 'mhi'
+                          ? 'bg-purple-600 text-white shadow-md'
                           : 'text-slate-500 hover:bg-slate-50'
                       }`}
                     >
@@ -1536,10 +1568,7 @@ const ProjectModal: React.FC<{
                   <div className="space-y-2">
                     <button
                       type="button"
-                      onClick={() => {
-                        setHasForeignComponents(!hasForeignComponents);
-                        setShouldRegenerateTasks(true);
-                      }}
+                      onClick={() => setHasForeignComponents(!hasForeignComponents)}
                       className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all border-2 ${
                         hasForeignComponents
                           ? 'bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner'
@@ -1552,10 +1581,7 @@ const ProjectModal: React.FC<{
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setHasSmallBatch(!hasSmallBatch);
-                        setShouldRegenerateTasks(true);
-                      }}
+                      onClick={() => setHasSmallBatch(!hasSmallBatch)}
                       className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold transition-all border-2 ${
                         hasSmallBatch
                           ? 'bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner'
@@ -1715,7 +1741,6 @@ const ProjectModal: React.FC<{
                       const regDurations = getRegulatoryDurationsForWeight(weight);
                       setDurations(regDurations);
                       recalculateAllDates(projectStartDate, regDurations);
-                      setShouldRegenerateTasks(true);
                     }}
                     className="text-[10px] font-black uppercase tracking-wider text-indigo-600 hover:text-indigo-800 bg-indigo-55/60 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1.5 rounded-lg transition-all shadow-sm"
                   >
@@ -1778,7 +1803,7 @@ const ProjectModal: React.FC<{
                               const newDurations = { ...durations, [stage]: val };
                               setDurations(newDurations);
                               if (planningMode === 'release') {
-                                const startStr = calculateProjectStartDate(releaseMonth, releaseYear, newDurations, weight);
+                                const startStr = calculateProjectStartDate(releaseMonth, releaseYear, releaseDay, newDurations, weight);
                                 setProjectStartDate(startStr);
                                 recalculateAllDates(startStr, newDurations);
                               } else {
@@ -1786,6 +1811,7 @@ const ProjectModal: React.FC<{
                                 const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, newDurations, weight);
                                 setReleaseMonth(computedReleaseDate.getMonth());
                                 setReleaseYear(computedReleaseDate.getFullYear());
+                                setReleaseDay(computedReleaseDate.getDate());
                               }
                             }}
                           />
@@ -1858,7 +1884,7 @@ const ProjectModal: React.FC<{
                             const newDurations = { ...durations, ['Производство и старт продаж']: val };
                             setDurations(newDurations);
                             if (planningMode === 'release') {
-                              const startStr = calculateProjectStartDate(releaseMonth, releaseYear, newDurations, weight);
+                              const startStr = calculateProjectStartDate(releaseMonth, releaseYear, releaseDay, newDurations, weight);
                               setProjectStartDate(startStr);
                               recalculateAllDates(startStr, newDurations);
                             } else {
@@ -1866,6 +1892,7 @@ const ProjectModal: React.FC<{
                               const computedReleaseDate = getCalculatedReleaseDate(projectStartDate, newDurations, weight);
                               setReleaseMonth(computedReleaseDate.getMonth());
                               setReleaseYear(computedReleaseDate.getFullYear());
+                              setReleaseDay(computedReleaseDate.getDate());
                             }
                           }}
                         />
@@ -1933,12 +1960,13 @@ const TaskBlock: React.FC<{
   onDelete: () => void;
   timelineStart: Date;
   cellWidth?: number;
+  zoomLevel?: 'day' | 'week' | 'month';
   lane?: number;
   isFocused?: boolean;
   isReadOnly?: boolean;
   projectWeight?: number | string;
   role?: string;
-}> = ({ task, onUpdate, onDelete, timelineStart, cellWidth = CELL_WIDTH, lane = 0, isFocused = false, isReadOnly = false, projectWeight, role }) => {
+}> = ({ task, onUpdate, onDelete, timelineStart, cellWidth = CELL_WIDTH, zoomLevel = 'week', lane = 0, isFocused = false, isReadOnly = false, projectWeight, role }) => {
   const left = (differenceInDays(task.startDate, timelineStart) / 7) * cellWidth;
   const width = (task.duration / 7) * cellWidth;
   const top = lane * ROW_HEIGHT + 4;
@@ -2096,6 +2124,20 @@ const TaskBlock: React.FC<{
     setIsEditing(false);
   };
 
+  // The nudge arrows move the task by whatever unit the timeline is
+  // currently zoomed to — a day, a week, or a month — so the step always
+  // matches what's visually one grid column.
+  const moveTaskBy = (direction: 1 | -1) => {
+    if (zoomLevel === 'day') {
+      onUpdate({ startDate: addDays(task.startDate, direction) });
+    } else if (zoomLevel === 'month') {
+      onUpdate({ startDate: addMonths(task.startDate, direction) });
+    } else {
+      onUpdate({ startDate: addWeeks(task.startDate, direction) });
+    }
+  };
+  const moveUnitLabel = zoomLevel === 'day' ? 'день' : zoomLevel === 'month' ? 'месяц' : 'неделю';
+
   return (
     <motion.div
       layoutId={task.id}
@@ -2248,14 +2290,14 @@ const TaskBlock: React.FC<{
             onMouseDown={handleResizeLeftMouseDown}
             className="absolute left-0 top-0 w-4 h-full cursor-w-resize z-20 group/handle-l"
           >
-            <button 
+            <button
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onUpdate({ startDate: addWeeks(task.startDate, -1) });
+                moveTaskBy(-1);
               }}
               className="absolute left-[-44px] top-1/2 -translate-y-1/2 w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-blue-600 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30"
-              title="Сдвинуть на неделю назад"
+              title={`Сдвинуть на ${moveUnitLabel} назад`}
             >
               <ChevronLeft size={16} strokeWidth={3} />
             </button>
@@ -2304,14 +2346,14 @@ const TaskBlock: React.FC<{
             >
               <Plus size={16} strokeWidth={3} />
             </button>
-            <button 
+            <button
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onUpdate({ startDate: addWeeks(task.startDate, 1) });
+                moveTaskBy(1);
               }}
               className="absolute right-[-44px] top-1/2 -translate-y-1/2 w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-blue-600 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30"
-              title="Сдвинуть на неделю вперед"
+              title={`Сдвинуть на ${moveUnitLabel} вперёд`}
             >
               <ChevronRight size={16} strokeWidth={3} />
             </button>
@@ -2791,14 +2833,14 @@ export default function App() {
 
   const [currentDate, setCurrentDate] = useState(new Date(2026, 0, 1));
   const [viewportWeeks, setViewportWeeks] = useState(104);
-  const [zoomLevel, setZoomLevel] = useState<'week' | 'month'>('week');
-  const cellWidth = zoomLevel === 'month' ? MONTH_ZOOM_CELL_WIDTH : CELL_WIDTH;
+  const [zoomLevel, setZoomLevel] = useState<'day' | 'week' | 'month'>('week');
+  const cellWidth = zoomLevel === 'month' ? MONTH_ZOOM_CELL_WIDTH : zoomLevel === 'day' ? DAY_ZOOM_CELL_WIDTH : CELL_WIDTH;
   const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [reassigning, setReassigning] = useState<{ projectId: string; resourceId: string; role: string } | null>(null);
 
-  const isProjectTab = activeTab.startsWith('projects_') || activeTab === 'projects' || activeTab === 'prototypes' || activeTab === 'releases';
+  const isProjectTab = activeTab.startsWith('projects_') || activeTab === 'projects' || activeTab === 'prototypes' || activeTab === 'releases' || activeTab === 'mhi' || activeTab === 'corps';
 
   const getUserConflict = (userName: string, projectId: string, resourceId: string) => {
     if (!userName || userName === 'Не назначен') return false;
@@ -2981,7 +3023,9 @@ export default function App() {
       
       if (activeTab === 'prototypes') return matchesSearch && p.isPrototype;
       if (activeTab === 'projects') return matchesSearch && !p.isPrototype;
-      
+      if (activeTab === 'mhi') return matchesSearch && !!p.isMhi;
+      if (activeTab === 'corps') return matchesSearch && (p.segment || '').trim().toLowerCase() === 'корп. заказ';
+
       if (activeTab.startsWith('projects_')) {
         const yearStr = activeTab.replace('projects_', '');
         const targetYear = parseInt(yearStr);
@@ -3026,6 +3070,9 @@ export default function App() {
     if (isReadOnly) return;
     recordAction();
     const sorted = [...projects].sort((a, b) => {
+      if (!!a.isCollapsed !== !!b.isCollapsed) {
+        return a.isCollapsed ? 1 : -1;
+      }
       const dateA = getProjectReleaseDate(a).getTime();
       const dateB = getProjectReleaseDate(b).getTime();
       return dateA - dateB;
@@ -3290,6 +3337,13 @@ export default function App() {
     return Array.from({ length: count }, (_, i) => addWeeks(timelineStart, i));
   }, [timelineStart, viewportWeeks, activeTab, releaseYearFilter, projectYears]);
 
+  // Only built out when actually zoomed to Day level — one entry per day
+  // across the same range as `weeks`, used for the day header/gridlines.
+  const days = useMemo(() => {
+    if (zoomLevel !== 'day') return [];
+    return Array.from({ length: weeks.length * 7 }, (_, i) => addDays(timelineStart, i));
+  }, [weeks, timelineStart, zoomLevel]);
+
   const months = useMemo(() => {
     const monthMap: Record<string, { monthName: string; year: string; daysInTimeline: number }> = {};
     weeks.forEach(weekStart => {
@@ -3323,7 +3377,7 @@ export default function App() {
     }
   };
 
-  const handleZoomLevelChange = (next: 'week' | 'month') => {
+  const handleZoomLevelChange = (next: 'day' | 'week' | 'month') => {
     if (next === zoomLevel) return;
     const container = scrollContainerRef.current;
     if (container) {
@@ -3923,6 +3977,14 @@ export default function App() {
 
           <div className="flex items-center bg-slate-100 p-1 rounded-lg gap-1 h-[38px]" title="Масштаб календаря">
             <button
+              onClick={() => handleZoomLevelChange('day')}
+              className={`px-3 h-full rounded-md text-xs font-bold transition-all ${
+                zoomLevel === 'day' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Дни
+            </button>
+            <button
               onClick={() => handleZoomLevelChange('week')}
               className={`px-3 h-full rounded-md text-xs font-bold transition-all ${
                 zoomLevel === 'week' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
@@ -4180,54 +4242,47 @@ export default function App() {
                               </div>
                             </div>
                             <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                              {!isReleasesTab && (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">Вес:</span>
+                                  {project.isMhi ? (
+                                    <span className="font-mono font-bold text-slate-400 text-[10px]">—</span>
+                                  ) : (
+                                    <>
+                                      {!isReadOnly && (
+                                        <div className="flex items-center gap-0.5 ml-0.5 mr-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); updateProjectWeight(project.id, -1); }}
+                                            className="w-4 h-4 flex items-center justify-center bg-white border border-slate-200 rounded text-slate-400 hover:text-red-600 hover:border-red-200 transition-colors"
+                                          >
+                                            <Minus size={10} strokeWidth={3} />
+                                          </button>
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); updateProjectWeight(project.id, 1); }}
+                                            className="w-4 h-4 flex items-center justify-center bg-white border border-slate-200 rounded text-slate-400 hover:text-green-600 hover:border-green-200 transition-colors"
+                                          >
+                                            <Plus size={10} strokeWidth={3} />
+                                          </button>
+                                        </div>
+                                      )}
+                                      <span className="font-mono font-bold text-slate-700 text-[10px]">{project.weight}</span>
+                                    </>
+                                  )}
+                                </div>
+                              )}
                               {project.segment && (
                                 <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest leading-none">{project.segment}</span>
                               )}
-                              <span className={`text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded leading-none ${
-                                project.isPrototype 
-                                  ? 'bg-amber-50 text-amber-700 border border-amber-100' 
-                                  : project.isMhi 
-                                    ? 'bg-purple-50 text-purple-700 border border-purple-100' 
-                                    : 'bg-indigo-50 text-indigo-700 border border-indigo-100'
-                              }`}>
-                                {project.isPrototype ? 'Прототип' : project.isMhi ? 'МХИ' : 'Игра'}
-                              </span>
                             </div>
                             {!isReleasesTab && (
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                                <div className="flex items-center gap-1">
-                              <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">Вес:</span>
-                              {project.isMhi ? (
-                                <span className="font-mono font-bold text-slate-400 text-[10px]">—</span>
-                              ) : (
-                                <>
-                                  {!isReadOnly && (
-                                    <div className="flex items-center gap-0.5 ml-0.5 mr-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                      <button
-                                        onClick={(e) => { e.stopPropagation(); updateProjectWeight(project.id, -1); }}
-                                        className="w-4 h-4 flex items-center justify-center bg-white border border-slate-200 rounded text-slate-400 hover:text-red-600 hover:border-red-200 transition-colors"
-                                      >
-                                        <Minus size={10} strokeWidth={3} />
-                                      </button>
-                                      <button
-                                        onClick={(e) => { e.stopPropagation(); updateProjectWeight(project.id, 1); }}
-                                        className="w-4 h-4 flex items-center justify-center bg-white border border-slate-200 rounded text-slate-400 hover:text-green-600 hover:border-green-200 transition-colors"
-                                      >
-                                        <Plus size={10} strokeWidth={3} />
-                                      </button>
-                                    </div>
-                                  )}
-                                  <span className="font-mono font-bold text-slate-700 text-[10px]">{project.weight}</span>
-                                </>
-                              )}
-                            </div>
-                            <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">Выход: <span className="font-bold text-indigo-600">
-                              {(() => {
-                                const latestTaskDate = getProjectReleaseDate(project);
-                                const months = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
-                                return latestTaskDate.getTime() > 0 ? `${months[latestTaskDate.getMonth()]} ${latestTaskDate.getFullYear()}` : '—';
-                              })()}
-                            </span></span>
+                                <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">Выход: <span className="font-bold text-indigo-600">
+                                  {(() => {
+                                    const latestTaskDate = getProjectReleaseDate(project);
+                                    const months = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+                                    return latestTaskDate.getTime() > 0 ? `${latestTaskDate.getDate()} ${months[latestTaskDate.getMonth()]} ${latestTaskDate.getFullYear()}` : '—';
+                                  })()}
+                                </span></span>
                               </div>
                             )}
                           </div>
@@ -4702,12 +4757,20 @@ export default function App() {
                   <div
                     key={idx}
                     style={{ width: (month.daysInTimeline / 7) * cellWidth }}
-                    className={`flex-shrink-0 border-r border-slate-400 flex flex-col items-center justify-center leading-tight font-bold uppercase tracking-widest text-slate-500 bg-white ${
-                      zoomLevel === 'month' ? 'text-[13px]' : 'text-[11px]'
-                    }`}
+                    className="flex-shrink-0 border-r border-slate-400 bg-white overflow-x-clip"
                   >
-                    <span>{month.monthName}</span>
-                    <span>{month.year}</span>
+                    {/* Sticky within its own month band: at Day zoom a month can
+                        be 1000px+ wide, so a plain centered label often lands
+                        under the sidebar or scrolls out of view entirely. */}
+                    <div
+                      className={`sticky w-fit h-10 flex flex-col items-center justify-center leading-tight font-bold uppercase tracking-widest text-slate-500 ${
+                        zoomLevel === 'month' ? 'h-20 text-[13px]' : 'text-[11px]'
+                      }`}
+                      style={{ left: 464 }}
+                    >
+                      <span>{month.monthName}</span>
+                      <span>{month.year}</span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -4739,26 +4802,71 @@ export default function App() {
                   })}
                 </div>
               )}
+              {/* Days (only rendered at the Day zoom level) */}
+              {zoomLevel === 'day' && (
+                <div className="flex h-10 border-t border-slate-100 overflow-hidden">
+                  {days.map((day, idx) => {
+                    const isToday = isSameDay(day, new Date());
+                    const isWeekend = day.getDay() === 0 || day.getDay() === 6;
+                    const isEndOfMonth = idx < days.length - 1 && days[idx + 1].getMonth() !== day.getMonth();
+
+                    return (
+                      <div
+                        key={idx}
+                        style={{ width: cellWidth / 7 }}
+                        className={`flex-shrink-0 border-r overflow-hidden flex flex-col items-center justify-center transition-colors ${
+                          isEndOfMonth ? 'border-r-slate-400' : 'border-slate-100'
+                        } ${isToday ? 'bg-indigo-50' : isWeekend ? 'bg-slate-50' : 'bg-white'}`}
+                      >
+                        <span className={`text-[9px] font-medium uppercase ${isToday ? 'text-indigo-600' : 'text-slate-400'}`}>
+                          {format(day, 'EEE', { locale: ru })}
+                        </span>
+                        <span className={`text-[10px] font-bold ${isToday ? 'text-indigo-700' : 'text-slate-700'}`}>
+                          {format(day, 'd')}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Grid Body */}
             <div className="relative">
               {/* Grid Lines Overlay */}
               <div className="absolute inset-0 z-0 pointer-events-none flex">
-                {weeks.map((weekStart, idx) => {
-                  const isCurrentWeek = new Date() >= weekStart && new Date() < addDays(weekStart, 7);
-                  const isEndOfMonth = idx < weeks.length - 1 && weeks[idx + 1].getMonth() !== weekStart.getMonth();
+                {zoomLevel === 'day' ? (
+                  days.map((day, idx) => {
+                    const isToday = isSameDay(day, new Date());
+                    const isWeekend = day.getDay() === 0 || day.getDay() === 6;
+                    const isEndOfMonth = idx < days.length - 1 && days[idx + 1].getMonth() !== day.getMonth();
 
-                  return (
-                    <div
-                      key={idx}
-                      style={{ width: cellWidth }}
-                      className={`flex-shrink-0 border-r h-full ${
-                        isEndOfMonth ? 'border-r-slate-400' : (zoomLevel === 'month' ? 'border-transparent' : 'border-slate-100')
-                      } ${isCurrentWeek ? 'bg-indigo-50/30' : ''}`}
-                    />
-                  );
-                })}
+                    return (
+                      <div
+                        key={idx}
+                        style={{ width: cellWidth / 7 }}
+                        className={`flex-shrink-0 border-r h-full ${
+                          isEndOfMonth ? 'border-r-slate-400' : 'border-slate-100'
+                        } ${isToday ? 'bg-indigo-50/30' : isWeekend ? 'bg-slate-50/60' : ''}`}
+                      />
+                    );
+                  })
+                ) : (
+                  weeks.map((weekStart, idx) => {
+                    const isCurrentWeek = new Date() >= weekStart && new Date() < addDays(weekStart, 7);
+                    const isEndOfMonth = idx < weeks.length - 1 && weeks[idx + 1].getMonth() !== weekStart.getMonth();
+
+                    return (
+                      <div
+                        key={idx}
+                        style={{ width: cellWidth }}
+                        className={`flex-shrink-0 border-r h-full ${
+                          isEndOfMonth ? 'border-r-slate-400' : (zoomLevel === 'month' ? 'border-transparent' : 'border-slate-100')
+                        } ${isCurrentWeek ? 'bg-indigo-50/30' : ''}`}
+                      />
+                    );
+                  })
+                )}
               </div>
 
               {/* Rows */}
@@ -4788,6 +4896,7 @@ export default function App() {
                             }}
                             timelineStart={timelineStart}
                             cellWidth={cellWidth}
+                            zoomLevel={zoomLevel}
                             isReadOnly={isReadOnly}
                             onUpdate={(updates) => {
                               if (resourceWithRelease) {
@@ -4833,8 +4942,15 @@ export default function App() {
                             onDoubleClick={(e) => {
                             const rect = e.currentTarget.getBoundingClientRect();
                             const x = e.clientX - rect.left;
-                            const weekIndex = Math.floor(x / cellWidth);
-                            if (!isReadOnly) addTask(project.id, resource.id, addWeeks(timelineStart, weekIndex));
+                            if (!isReadOnly) {
+                              if (zoomLevel === 'day') {
+                                const dayIndex = Math.floor(x / (cellWidth / 7));
+                                addTask(project.id, resource.id, addDays(timelineStart, dayIndex));
+                              } else {
+                                const weekIndex = Math.floor(x / cellWidth);
+                                addTask(project.id, resource.id, addWeeks(timelineStart, weekIndex));
+                              }
+                            }
                           }}
                         >
                           {resource.tasks.map(task => (
@@ -4843,6 +4959,7 @@ export default function App() {
                               task={task}
                               timelineStart={timelineStart}
                               cellWidth={cellWidth}
+                              zoomLevel={zoomLevel}
                               isFocused={reviewIndex !== null && reviewTasks[reviewIndex]?.task.id === task.id}
                               isReadOnly={isReadOnly}
                               onUpdate={(updates) => updateTask(project.id, resource.id, task.id, updates)}
@@ -4876,6 +4993,7 @@ export default function App() {
                             task={{ ...task, label: `${project}: ${task.label}` }}
                             timelineStart={timelineStart}
                             cellWidth={cellWidth}
+                            zoomLevel={zoomLevel}
                             lane={lane}
                             isFocused={reviewIndex !== null && reviewTasks[reviewIndex]?.task.id === task.id}
                             isReadOnly={isReadOnly}
@@ -4960,13 +5078,25 @@ export default function App() {
                 Проекты {yr}
               </button>
             ))}
-            <button 
+            <button
               onClick={() => setActiveTab('prototypes')}
               className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'prototypes' ? 'bg-white shadow-sm text-amber-600' : 'text-slate-400 hover:text-slate-600'}`}
             >
               Прототипы
             </button>
-            <button 
+            <button
+              onClick={() => setActiveTab('mhi')}
+              className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'mhi' ? 'bg-white shadow-sm text-fuchsia-600' : 'text-slate-400 hover:text-slate-600'}`}
+            >
+              МХИ
+            </button>
+            <button
+              onClick={() => setActiveTab('corps')}
+              className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'corps' ? 'bg-white shadow-sm text-cyan-600' : 'text-slate-400 hover:text-slate-600'}`}
+            >
+              Корпы
+            </button>
+            <button
               onClick={() => setActiveTab('releases')}
               className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'releases' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
             >
