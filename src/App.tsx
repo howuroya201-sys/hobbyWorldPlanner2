@@ -35,7 +35,8 @@ import {
   SortAsc,
   EyeOff,
   Undo2,
-  ExternalLink
+  ExternalLink,
+  MessageSquare
 } from 'lucide-react';
 import { 
   format, 
@@ -192,6 +193,7 @@ interface Task {
   segment?: string;
   isDelay?: boolean;
   isRisk?: boolean;
+  comment?: string;
 }
 
 interface Resource {
@@ -226,6 +228,7 @@ interface User {
   name: string;
   imageUrl?: string;
   roles: string[];
+  isCollapsed?: boolean;
   vacations?: Array<{
     id: string;
     startDate: string;
@@ -1999,7 +2002,32 @@ const TaskBlock: React.FC<{
   const [pixelDelta, setPixelDelta] = useState(0);
   const [isEditing, setIsEditing] = useState(false);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
+  const [showCommentBox, setShowCommentBox] = useState(false);
+  const [tempComment, setTempComment] = useState(task.comment || '');
   const [tempLabel, setTempLabel] = useState(task.label);
+  const commentBoxRef = useRef<HTMLDivElement>(null);
+
+  const commitComment = () => {
+    if (tempComment !== (task.comment || '')) {
+      onUpdate({ comment: tempComment });
+    }
+    setShowCommentBox(false);
+  };
+
+  // Close (and save) the comment box on a click outside it, instead of
+  // leaving it open indefinitely — without this, moving the mouse off the
+  // task and back later would reveal the box still open, looking like it
+  // had popped open on hover.
+  useEffect(() => {
+    if (!showCommentBox) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (commentBoxRef.current && !commentBoxRef.current.contains(e.target as Node)) {
+        commitComment();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showCommentBox, tempComment]);
 
   const startXRef = useRef(0);
   const latestClientXRef = useRef(0);
@@ -2138,6 +2166,24 @@ const TaskBlock: React.FC<{
   };
   const moveUnitLabel = zoomLevel === 'day' ? 'день' : zoomLevel === 'month' ? 'месяц' : 'неделю';
 
+  // The +/- duration buttons resize the task by whatever unit the timeline
+  // is currently zoomed to — a day, a week, or a month — matching moveTaskBy
+  // above. Months are applied to the end date (not added as a flat 30 days)
+  // so a step always lands on the same day-of-month regardless of length.
+  const resizeTaskBy = (direction: 1 | -1) => {
+    const endDate = addDays(task.startDate, task.duration);
+    const newEndDate = zoomLevel === 'day'
+      ? addDays(endDate, direction)
+      : zoomLevel === 'month'
+      ? addMonths(endDate, direction)
+      : addWeeks(endDate, direction);
+    const newDuration = differenceInDays(newEndDate, task.startDate);
+    if (newDuration >= 1) {
+      onUpdate({ duration: newDuration });
+    }
+  };
+  const resizeUnitLabel = zoomLevel === 'day' ? 'дн' : zoomLevel === 'month' ? 'мес' : 'нед';
+
   return (
     <motion.div
       layoutId={task.id}
@@ -2222,8 +2268,49 @@ const TaskBlock: React.FC<{
           </div>
           
           <div className="flex items-center gap-1 opacity-0 group-hover/task:opacity-100 transition-opacity ml-1 relative">
+            <div className="flex items-center relative" ref={commentBoxRef}>
+              <button
+                onClick={(e) => {
+                  if (isReadOnly) return;
+                  e.stopPropagation();
+                  setTempComment(task.comment || '');
+                  setShowCommentBox(!showCommentBox);
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                className={`p-1 rounded transition-colors ${showCommentBox ? 'bg-white/30' : 'hover:bg-white/20'}`}
+                title={task.comment ? 'Комментарий к задаче' : 'Добавить комментарий'}
+              >
+                <MessageSquare size={10} fill={task.comment ? 'currentColor' : 'none'} />
+              </button>
+
+              {showCommentBox && (
+                <div
+                  className={`absolute right-0 ${isUpwardDropdown ? 'bottom-full mb-1' : 'top-full mt-1'} flex flex-col gap-1.5 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl p-2 z-[100] w-56 normal-case font-normal`}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <textarea
+                    autoFocus
+                    value={tempComment}
+                    onChange={(e) => setTempComment(e.target.value)}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    placeholder="Комментарий к задаче..."
+                    className="w-full h-20 bg-slate-900 border border-slate-700 rounded-md p-2 text-[10px] text-white placeholder:text-slate-500 outline-none focus:border-indigo-500 resize-none"
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      onClick={commitComment}
+                      className="text-[9px] px-2 py-1 bg-indigo-600 hover:bg-indigo-500 rounded-md font-bold uppercase tracking-tighter text-white transition-colors"
+                    >
+                      Сохранить
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="flex items-center">
-              <button 
+              <button
                 onClick={(e) => {
                   if (isReadOnly) return;
                   e.stopPropagation();
@@ -2264,20 +2351,24 @@ const TaskBlock: React.FC<{
                       </button>
                     );
                   })}
+                  <div className="h-px bg-slate-700 my-1" />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowStatusMenu(false);
+                      onDelete();
+                    }}
+                    className="text-[9px] px-2 py-1.5 hover:bg-red-500/20 rounded-md text-left transition-colors flex items-center gap-2 font-bold uppercase tracking-tighter text-red-400"
+                    title="Удалить задачу"
+                  >
+                    <div className="w-[10px] flex items-center justify-center">
+                      <Trash2 size={10} />
+                    </div>
+                    <span className="truncate">Удалить</span>
+                  </button>
                 </div>
               )}
             </div>
-
-            <button 
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete();
-              }}
-              className="p-1 hover:bg-white/20 rounded transition-colors"
-              title="Удалить задачу"
-            >
-              <Trash2 size={10} />
-            </button>
           </div>
         </>
       )}
@@ -2305,20 +2396,14 @@ const TaskBlock: React.FC<{
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                if (task.duration > 7) {
-                  onUpdate({ 
-                    duration: task.duration - 7 
-                  });
-                }
+                resizeTaskBy(-1);
               }}
               onDoubleClick={(e) => {
                 e.stopPropagation();
-                onUpdate({ 
-                  duration: task.duration + 7 
-                });
+                resizeTaskBy(1);
               }}
               className="absolute left-[-14px] top-1/2 -translate-y-1/2 w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-red-500 hover:bg-red-500 hover:text-white hover:border-red-500 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30"
-              title="Уменьшить (клик: -1 нед, дабл-клик: +1 нед)"
+              title={`Уменьшить (клик: -1 ${resizeUnitLabel}, дабл-клик: +1 ${resizeUnitLabel})`}
             >
               <Minus size={14} strokeWidth={4} />
             </button>
@@ -2333,16 +2418,14 @@ const TaskBlock: React.FC<{
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                onUpdate({ duration: task.duration + 7 });
+                resizeTaskBy(1);
               }}
               onDoubleClick={(e) => {
                 e.stopPropagation();
-                if (task.duration > 7) {
-                  onUpdate({ duration: task.duration - 7 });
-                }
+                resizeTaskBy(-1);
               }}
               className="absolute right-[-14px] top-1/2 -translate-y-1/2 w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-green-600 hover:bg-green-600 hover:text-white hover:border-green-600 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30"
-              title="Увеличить (клик: +1 нед, дабл-клик: -1 нед)"
+              title={`Увеличить (клик: +1 ${resizeUnitLabel}, дабл-клик: -1 ${resizeUnitLabel})`}
             >
               <Plus size={16} strokeWidth={3} />
             </button>
@@ -2374,11 +2457,18 @@ export default function App() {
   const [users, setUsers] = useState<User[]>(INITIAL_USERS);
   const [lockedProjects, setLockedProjects] = useState<Record<string, boolean>>({});
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
-  
+  const [collapsedUsers, setCollapsedUsers] = useState<Record<string, boolean>>({});
+
   const getProjectRowHeight = (project: Project, isReleasesTab = false) => {
     if (isReleasesTab) return ROW_HEIGHT + 2;
     if (collapsedProjects[project.id]) return ROW_HEIGHT + 2;
     return (project.resources.length * ROW_HEIGHT) + 2;
+  };
+
+  const getUserRowHeight = (user: User) => {
+    if (collapsedUsers[user.id]) return ROW_HEIGHT + 2;
+    const lanesInfo = userTasksWithLanes[user.name];
+    return ((lanesInfo?.maxLanes || 1) * ROW_HEIGHT) + 2;
   };
 
   const [history, setHistory] = useState<{ projects: Project[]; users: User[] }[]>(() => {
@@ -2566,6 +2656,14 @@ export default function App() {
             });
             setCollapsedProjects(collapsedMap);
 
+            const collapsedUsersMap: Record<string, boolean> = {};
+            data.users.forEach((u: User) => {
+              if (u.isCollapsed !== undefined) {
+                collapsedUsersMap[u.id] = u.isCollapsed;
+              }
+            });
+            setCollapsedUsers(collapsedUsersMap);
+
             // Try to sync to server
             for (const p of processedProjects) {
               await syncProjectToServer(p);
@@ -2655,7 +2753,15 @@ export default function App() {
           });
           
           setUsers(updatedUsers);
-          
+
+          const collapsedUsersMap: Record<string, boolean> = {};
+          updatedUsers.forEach((user: User) => {
+            if (user.isCollapsed !== undefined) {
+              collapsedUsersMap[user.id] = user.isCollapsed;
+            }
+          });
+          setCollapsedUsers(collapsedUsersMap);
+
           if (updatedAny) {
             updatedUsers.forEach((user: User) => {
               const original = data.find((u: User) => u.id === user.id);
@@ -2714,7 +2820,32 @@ export default function App() {
       return updated;
     });
   };
-  
+
+  const toggleUserCollapse = (userId: string, isCollapsed: boolean) => {
+    setCollapsedUsers(prev => ({
+      ...prev,
+      [userId]: isCollapsed
+    }));
+
+    if (isReadOnly) return;
+
+    setUsers(prevUsers => {
+      const updated = prevUsers.map(u => {
+        if (u.id === userId) {
+          const updatedUser = { ...u, isCollapsed };
+          fetch('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedUser)
+          }).catch(err => console.error('Database save user error:', err));
+          return updatedUser;
+        }
+        return u;
+      });
+      return updated;
+    });
+  };
+
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
 
@@ -2821,7 +2952,20 @@ export default function App() {
   };
 
   const [activeTab, setActiveTab] = useState<string>('projects');
+  const [showYearMenu, setShowYearMenu] = useState(false);
+  const yearMenuRef = useRef<HTMLDivElement>(null);
   const [userRoleFilter, setUserRoleFilter] = useState<string>('all');
+
+  useEffect(() => {
+    if (!showYearMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (yearMenuRef.current && !yearMenuRef.current.contains(e.target as Node)) {
+        setShowYearMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showYearMenu]);
   
   // Review Tasks Mode State
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
@@ -3099,8 +3243,11 @@ export default function App() {
   [users, editingUserId]);
 
   const processedUsers = useMemo(() => {
-    // Sorting: Primary role (first in array), then Name
+    // Sorting: hidden (collapsed) users last, then primary role (first in array), then Name
     const sorted = [...users].sort((a, b) => {
+      const aCollapsed = !!collapsedUsers[a.id];
+      const bCollapsed = !!collapsedUsers[b.id];
+      if (aCollapsed !== bCollapsed) return aCollapsed ? 1 : -1;
       const roleA = a.roles[0] || '';
       const roleB = b.roles[0] || '';
       if (roleA !== roleB) return roleA.localeCompare(roleB);
@@ -3110,7 +3257,7 @@ export default function App() {
     // Filtering
     if (userRoleFilter === 'all') return sorted;
     return sorted.filter(u => u.roles.includes(userRoleFilter));
-  }, [users, userRoleFilter]);
+  }, [users, userRoleFilter, collapsedUsers]);
 
   const userTasksWithLanes = useMemo(() => {
     const rawMap: Record<string, { project: string; role: string; task: Task; projectId: string; resourceId: string; projectWeight?: number | string }[]> = {};
@@ -4113,7 +4260,7 @@ export default function App() {
                       />
                     </div>
                   </div>
-                  {sortedProjects.map(project => {
+                  {sortedProjects.map((project, projectIndex) => {
                     const isReleasesTab = activeTab === 'releases';
                     const isCollapsed = !isReleasesTab && collapsedProjects[project.id];
                     const rowHeight = getProjectRowHeight(project, isReleasesTab);
@@ -4147,6 +4294,7 @@ export default function App() {
                             >
                               <ChevronDown size={14} strokeWidth={2.5} />
                             </button>
+                            <span className="text-[10px] font-black text-slate-300 flex-shrink-0 w-4 text-right tabular-nums">{projectIndex + 1}</span>
                             <div className="flex flex-col min-w-0 flex-1 justify-center">
                               <span className="font-bold text-[12px] text-slate-800 truncate group-hover:text-indigo-600 transition-colors leading-tight">{project.name}</span>
                               {project.segment && (
@@ -4223,6 +4371,7 @@ export default function App() {
                                     <ChevronUp size={12} strokeWidth={2.5} />
                                   </button>
                                 )}
+                                <span className="text-[10px] font-black text-slate-300 flex-shrink-0 tabular-nums">{projectIndex + 1}.</span>
                                 <span className="font-bold text-[13px] text-slate-800 line-clamp-2 group-hover:text-indigo-600 transition-colors leading-tight">{project.name}</span>
                               </div>
                               <div className="flex items-center gap-1">
@@ -4329,12 +4478,37 @@ export default function App() {
                     </select>
                   </div>
                   {processedUsers.map(user => {
-                    const lanesInfo = userTasksWithLanes[user.name];
-                    const rowHeight = (lanesInfo?.maxLanes || 1) * ROW_HEIGHT;
+                    const isCollapsed = collapsedUsers[user.id];
+                    const rowHeight = getUserRowHeight(user);
+                    if (isCollapsed) {
+                      return (
+                        <div
+                          key={user.id}
+                          style={{ height: rowHeight }}
+                          className="flex items-center gap-2 px-4 border-b-2 border-slate-400 hover:bg-slate-50 group cursor-pointer transition-colors"
+                          onClick={() => {
+                            setEditingUserId(user.id);
+                            setModalMode('edit');
+                          }}
+                        >
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleUserCollapse(user.id, false);
+                            }}
+                            className="p-1 rounded bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-indigo-600 transition-all flex items-center justify-center flex-shrink-0"
+                            title="Развернуть сотрудника"
+                          >
+                            <ChevronDown size={14} strokeWidth={2.5} />
+                          </button>
+                          <span className="text-xs font-bold text-slate-800 truncate group-hover:text-indigo-600">{user.name}</span>
+                        </div>
+                      );
+                    }
                     return (
-                      <div 
-                        key={user.id} 
-                        style={{ height: rowHeight + 2 }}
+                      <div
+                        key={user.id}
+                        style={{ height: rowHeight }}
                         className="flex items-center px-4 border-b-2 border-slate-400 hover:bg-slate-50 group cursor-pointer transition-colors"
                         onClick={() => {
                           setEditingUserId(user.id);
@@ -4348,6 +4522,16 @@ export default function App() {
                             {user.roles.join(' • ')}
                           </div>
                         </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleUserCollapse(user.id, true);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-slate-200 text-slate-400 hover:text-indigo-600 transition-all flex-shrink-0 flex items-center justify-center"
+                          title="Скрыть сотрудника"
+                        >
+                          <ChevronUp size={12} strokeWidth={2.5} />
+                        </button>
                       </div>
                     );
                   })}
@@ -4698,19 +4882,19 @@ export default function App() {
                             </div>
                             <div className="min-w-[192px]">
                               {processedUsers.map(user => {
-                                const lanesInfo = userTasksWithLanes[user.name];
-                                const rowHeight = (lanesInfo?.maxLanes || 1) * ROW_HEIGHT;
+                                const isCollapsed = collapsedUsers[user.id];
+                                const rowHeight = getUserRowHeight(user);
                                 return (
-                                  <div 
-                                    key={`vacation-side-${user.id}`} 
-                                    style={{ height: rowHeight + 2 }}
+                                  <div
+                                    key={`vacation-side-${user.id}`}
+                                    style={{ height: rowHeight }}
                                     className="flex flex-col justify-center px-4 border-b-2 border-slate-400 hover:bg-slate-100/50 transition-colors group cursor-pointer"
                                     onClick={() => {
                                       setEditingUserId(user.id);
                                       setModalMode('edit');
                                     }}
                                   >
-                                    {(() => {
+                                    {isCollapsed ? null : (() => {
                                       const personalVacations = (user.vacations || []).filter(v => !v.isHoliday && !v.id.startsWith('ru-holiday'));
                                       return personalVacations.length > 0 ? (
                                         <div className="space-y-1">
@@ -4976,15 +5160,16 @@ export default function App() {
                 })
               ) : (
                 processedUsers.map(user => {
+                    const isCollapsed = collapsedUsers[user.id];
                     const lanesInfo = userTasksWithLanes[user.name];
-                    const tasksForUser = lanesInfo?.tasks || [];
-                    const rowHeight = (lanesInfo?.maxLanes || 1) * ROW_HEIGHT;
+                    const tasksForUser = isCollapsed ? [] : (lanesInfo?.tasks || []);
+                    const rowHeight = getUserRowHeight(user);
                     return (
-                      <motion.div 
+                      <motion.div
                         layout
-                        key={user.id} 
-                        style={{ height: rowHeight + 2 }}
-                        className="border-b-2 border-slate-400 relative group/row hover:bg-slate-50/50 transition-colors"
+                        key={user.id}
+                        style={{ height: rowHeight }}
+                        className="border-b-2 border-slate-400 relative group/row hover:bg-slate-50/50 transition-colors overflow-hidden"
                         transition={{ type: "spring", stiffness: 300, damping: 30 }}
                       >
                         {tasksForUser.map(({ project, task, projectId, resourceId, lane, projectWeight, role }) => (
@@ -5003,7 +5188,7 @@ export default function App() {
                             role={role}
                           />
                         ))}
-                        {user.vacations?.map(vacation => {
+                        {!isCollapsed && user.vacations?.map(vacation => {
                           const start = new Date(vacation.startDate);
                           const end = new Date(vacation.endDate);
                           const duration = differenceInDays(end, start);
@@ -5069,15 +5254,32 @@ export default function App() {
             >
               Все проекты
             </button>
-            {projectYears.map(yr => (
-              <button 
-                key={yr}
-                onClick={() => setActiveTab(`projects_${yr}`)}
-                className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === `projects_${yr}` ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+            <div className="relative" ref={yearMenuRef}>
+              <button
+                onClick={() => setShowYearMenu(!showYearMenu)}
+                className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all flex items-center gap-1 ${activeTab.startsWith('projects_') ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
               >
-                Проекты {yr}
+                {activeTab.startsWith('projects_') ? `Проекты ${activeTab.replace('projects_', '')}` : 'Проекты по годам'}
+                <ChevronDown size={10} strokeWidth={3} />
               </button>
-            ))}
+
+              {showYearMenu && (
+                <div className="absolute bottom-full mb-1 left-0 flex flex-col bg-slate-800 border border-slate-700 rounded-lg shadow-2xl p-1 z-[100] min-w-[110px]">
+                  {projectYears.map(yr => (
+                    <button
+                      key={yr}
+                      onClick={() => {
+                        setActiveTab(`projects_${yr}`);
+                        setShowYearMenu(false);
+                      }}
+                      className={`text-[9px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-bold uppercase tracking-tighter ${activeTab === `projects_${yr}` ? 'text-indigo-300 bg-white/5' : 'text-slate-300'}`}
+                    >
+                      Проекты {yr}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setActiveTab('prototypes')}
               className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'prototypes' ? 'bg-white shadow-sm text-amber-600' : 'text-slate-400 hover:text-slate-600'}`}
