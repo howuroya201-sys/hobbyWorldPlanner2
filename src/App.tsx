@@ -3230,20 +3230,54 @@ export default function App() {
 
   // "Импорт" button dropdown: lists the last MAX_BACKUPS daily auto-backups
   // (see server.ts) alongside the pre-existing manual file-import option.
+  // Rendered through a portal into <body>, positioned in fixed (viewport)
+  // coordinates computed from the button — same reason as the task comment
+  // popover above: a z-index set here can't escape the sticky Gantt
+  // timeline header's own stacking context, which is why it kept getting
+  // hidden underneath the month bands.
   const [showBackupsMenu, setShowBackupsMenu] = useState(false);
-  const backupsMenuRef = useRef<HTMLDivElement>(null);
+  const backupsMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const backupsMenuPanelRef = useRef<HTMLDivElement>(null);
+  const [backupsMenuPos, setBackupsMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [backupsList, setBackupsList] = useState<{ id: string; createdAt: string }[]>([]);
   const [isLoadingBackups, setIsLoadingBackups] = useState(false);
 
   useEffect(() => {
     if (!showBackupsMenu) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (backupsMenuRef.current && !backupsMenuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const insideButton = backupsMenuButtonRef.current?.contains(target);
+      const insidePanel = backupsMenuPanelRef.current?.contains(target);
+      if (!insideButton && !insidePanel) {
         setShowBackupsMenu(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showBackupsMenu]);
+
+  useLayoutEffect(() => {
+    if (!showBackupsMenu) {
+      setBackupsMenuPos(null);
+      return;
+    }
+    const updatePosition = () => {
+      const btn = backupsMenuButtonRef.current;
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      const panelWidth = 288;
+      let left = rect.right - panelWidth;
+      left = Math.max(8, Math.min(left, window.innerWidth - panelWidth - 8));
+      const top = rect.bottom + 8;
+      setBackupsMenuPos({ top, left });
+    };
+    updatePosition();
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
   }, [showBackupsMenu]);
 
   const fetchBackupsList = async () => {
@@ -4580,8 +4614,9 @@ export default function App() {
             <span className="text-[10px] font-black uppercase tracking-tighter hidden sm:inline">Экспорт</span>
           </button>
 
-          <div className="relative" ref={backupsMenuRef}>
+          <div className="relative">
             <button
+              ref={backupsMenuButtonRef}
               onClick={() => {
                 const next = !showBackupsMenu;
                 setShowBackupsMenu(next);
@@ -4594,8 +4629,12 @@ export default function App() {
               <span className="text-[10px] font-black uppercase tracking-tighter hidden sm:inline">Импорт</span>
             </button>
 
-            {showBackupsMenu && (
-              <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-slate-200 rounded-lg shadow-2xl z-[200] overflow-hidden">
+            {showBackupsMenu && backupsMenuPos && createPortal(
+              <div
+                ref={backupsMenuPanelRef}
+                style={{ position: 'fixed', top: backupsMenuPos.top, left: backupsMenuPos.left, zIndex: 9999 }}
+                className="w-72 bg-white border border-slate-200 rounded-lg shadow-2xl overflow-hidden"
+              >
                 <div className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-400 border-b border-slate-100">
                   Автобэкапы (каждый день в 9:00)
                 </div>
@@ -4626,7 +4665,8 @@ export default function App() {
                     Загрузить файл вручную
                   </button>
                 </div>
-              </div>
+              </div>,
+              document.body
             )}
           </div>
 
