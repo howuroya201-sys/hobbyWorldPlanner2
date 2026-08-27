@@ -237,6 +237,33 @@ interface Project {
   rulesLayoutDate?: string;
   approvalDate?: string;
   postLayoutDate?: string;
+  // "Девелопмент" tab — separate opt-in list and fields from the editorial
+  // ones above, even where conceptually parallel (e.g. devStatus vs
+  // editorialStatus), since a project can be in both tables independently
+  // and the two workflows' notes/status shouldn't leak into each other.
+  inDevelopmentLayout?: boolean;
+  devStatus?: string;
+  devDocNote?: string;
+  devComment?: string;
+  devStartDate?: string;
+  devToEditorialDate?: string;
+  devDocDate?: string;
+  devCoreDate?: string;
+  devGameDate?: string;
+  devFinalizationDate?: string;
+  // "Концептирование и арт-продакшн" tab — same independence rationale as
+  // the Девелопмент fields above.
+  inArtLayout?: boolean;
+  artStatus?: string;
+  artTaskNote?: string;
+  artComment?: string;
+  artStartDate?: string;
+  artToLayoutDate?: string;
+  artTzDate?: string;
+  artContractorDate?: string;
+  artStyleDate?: string;
+  artDrawingDate?: string;
+  artFinalizationDate?: string;
 }
 
 interface User {
@@ -372,6 +399,79 @@ const getEditorialFactLabel = (project: Project, role: 'Редактирован
   if (project.boxLayoutDate) return 'Вёрстка правил';
   if (project.componentsLayoutDate) return 'Вёрстка коробки';
   return 'Вёрстка компонентов';
+};
+
+// "Девелопмент" tab's own status list — separate from EDITORIAL_STATUSES,
+// a different workflow with its own (shorter) set of stages/states.
+const DEV_STATUSES: { value: string; className: string }[] = [
+  { value: 'Девелопмент', className: 'bg-purple-100 text-purple-700' },
+  { value: 'Тестирование', className: 'bg-cyan-100 text-cyan-700' },
+  { value: 'Финализация', className: 'bg-emerald-100 text-emerald-700' },
+  { value: 'Согласование', className: 'bg-sky-100 text-sky-700' },
+  { value: 'Затык', className: 'bg-red-100 text-red-700' },
+  { value: 'Сдано', className: 'bg-teal-100 text-teal-700' },
+];
+
+// Same divider convention as EDITORIAL_STATUS_UPPER_GROUP_SIZE: statuses
+// through this index render above the dropdown's divider and don't affect
+// the "Факт" label; the rest render below it and do.
+const DEV_STATUS_UPPER_GROUP_SIZE = 3;
+const DEV_BELOW_LINE_STATUSES = DEV_STATUSES.slice(DEV_STATUS_UPPER_GROUP_SIZE).map(s => s.value);
+
+// Column display order for the "Девелопмент" table's 4 rightmost date
+// columns — unlike EDITORIAL_PLAN_DISPLAY_ORDER there's no regulatory plan
+// chain behind these at all (every project is treated like a МХИ project in
+// the editorial table: no suggested dates, only manual entries).
+const DEV_STAGE_DISPLAY_ORDER = ['devDocDate', 'devCoreDate', 'devGameDate', 'devFinalizationDate'] as const;
+
+// Label for the "Факт" overlay bar on the Девелопмент resource row: mirrors
+// getEditorialFactLabel's shape (most-advanced-state-backward, below-line
+// status overrides outright) but with a single chain instead of two, and
+// each column's own name doubling as the "what's next" label — there's no
+// separate label vocabulary for this tab the way editorial has one.
+const getDevFactLabel = (project: Project): string => {
+  if (project.devStatus && DEV_BELOW_LINE_STATUSES.includes(project.devStatus)) {
+    return project.devStatus;
+  }
+  if (project.devFinalizationDate) return 'Сдано';
+  if (project.devGameDate) return 'Финализация';
+  if (project.devCoreDate) return 'Девелопмент игры';
+  if (project.devDocDate) return 'Работа над ядром';
+  return 'Создание девдока';
+};
+
+// "Концептирование и арт-продакшн" tab's own status list — separate from
+// EDITORIAL_STATUSES/DEV_STATUSES, own (short) workflow vocabulary.
+const ART_STATUSES: { value: string; className: string }[] = [
+  { value: 'Составление ТЗ', className: 'bg-cyan-100 text-cyan-700' },
+  { value: 'Поиск подрядчика', className: 'bg-purple-100 text-purple-700' },
+  { value: 'Отрисовка', className: 'bg-fuchsia-100 text-fuchsia-700' },
+  { value: 'Согласование', className: 'bg-sky-100 text-sky-700' },
+  { value: 'Затык', className: 'bg-red-100 text-red-700' },
+  { value: 'Сдано', className: 'bg-teal-100 text-teal-700' },
+];
+
+const ART_STATUS_UPPER_GROUP_SIZE = 3;
+const ART_BELOW_LINE_STATUSES = ART_STATUSES.slice(ART_STATUS_UPPER_GROUP_SIZE).map(s => s.value);
+
+// Column display order for the "Концептирование и арт-продакшн" table's 5
+// rightmost date columns — same "no regulatory plan chain, MHI-style blank
+// until filled in" rule as DEV_STAGE_DISPLAY_ORDER.
+const ART_STAGE_DISPLAY_ORDER = ['artTzDate', 'artContractorDate', 'artStyleDate', 'artDrawingDate', 'artFinalizationDate'] as const;
+
+// Label for the "Факт" overlay bar on the Арт Продакшн resource row —
+// same shape as getDevFactLabel (most-advanced-state-backward, below-line
+// status overrides outright, intermediate labels are the column names).
+const getArtFactLabel = (project: Project): string => {
+  if (project.artStatus && ART_BELOW_LINE_STATUSES.includes(project.artStatus)) {
+    return project.artStatus;
+  }
+  if (project.artFinalizationDate) return 'Сдано';
+  if (project.artDrawingDate) return 'Финализация';
+  if (project.artStyleDate) return 'Отрисовка';
+  if (project.artContractorDate) return 'Согласование стиля';
+  if (project.artTzDate) return 'Поиск подрядчика';
+  return 'Составление ТЗ';
 };
 
 // Working-day durations for each auto-planned stage in the "Редактура и
@@ -2594,7 +2694,7 @@ const TaskBlock: React.FC<{
                 e.stopPropagation();
                 moveTaskBy(-1);
               }}
-              className="absolute left-[-44px] top-1/2 -translate-y-1/2 w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-blue-600 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30"
+              className={`absolute left-[-44px] ${dimmed ? 'top-0' : 'top-1/2 -translate-y-1/2'} w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-blue-600 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30`}
               title={`Сдвинуть на ${moveUnitLabel} назад`}
             >
               <ChevronLeft size={16} strokeWidth={3} />
@@ -2609,7 +2709,7 @@ const TaskBlock: React.FC<{
                 e.stopPropagation();
                 resizeTaskBy(1);
               }}
-              className="absolute left-[-14px] top-1/2 -translate-y-1/2 w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-red-500 hover:bg-red-500 hover:text-white hover:border-red-500 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30"
+              className={`absolute left-[-14px] ${dimmed ? 'top-0' : 'top-1/2 -translate-y-1/2'} w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-red-500 hover:bg-red-500 hover:text-white hover:border-red-500 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30`}
               title={`Уменьшить (клик: -1 ${resizeUnitLabel}, дабл-клик: +1 ${resizeUnitLabel})`}
             >
               <Minus size={14} strokeWidth={4} />
@@ -2631,7 +2731,7 @@ const TaskBlock: React.FC<{
                 e.stopPropagation();
                 resizeTaskBy(-1);
               }}
-              className="absolute right-[-14px] top-1/2 -translate-y-1/2 w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-green-600 hover:bg-green-600 hover:text-white hover:border-green-600 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30"
+              className={`absolute right-[-14px] ${dimmed ? 'top-0' : 'top-1/2 -translate-y-1/2'} w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-green-600 hover:bg-green-600 hover:text-white hover:border-green-600 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30`}
               title={`Увеличить (клик: +1 ${resizeUnitLabel}, дабл-клик: -1 ${resizeUnitLabel})`}
             >
               <Plus size={16} strokeWidth={3} />
@@ -2642,7 +2742,7 @@ const TaskBlock: React.FC<{
                 e.stopPropagation();
                 moveTaskBy(1);
               }}
-              className="absolute right-[-44px] top-1/2 -translate-y-1/2 w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-blue-600 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30"
+              className={`absolute right-[-44px] ${dimmed ? 'top-0' : 'top-1/2 -translate-y-1/2'} w-7 h-7 bg-white rounded-full shadow-xl border-2 border-slate-100 flex items-center justify-center text-blue-600 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all opacity-0 group-hover/task:opacity-100 scale-90 hover:scale-110 active:scale-95 z-30`}
               title={`Сдвинуть на ${moveUnitLabel} вперёд`}
             >
               <ChevronRight size={16} strokeWidth={3} />
@@ -3323,6 +3423,40 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showAddEditorialProjectMenu]);
 
+  // Same "+" picker, for the "Девелопмент" table's opt-in list.
+  const [showAddDevProjectMenu, setShowAddDevProjectMenu] = useState(false);
+  const [devAddSearch, setDevAddSearch] = useState('');
+  const addDevProjectMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showAddDevProjectMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (addDevProjectMenuRef.current && !addDevProjectMenuRef.current.contains(e.target as Node)) {
+        setShowAddDevProjectMenu(false);
+        setDevAddSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showAddDevProjectMenu]);
+
+  // Same "+" picker, for the "Концептирование и арт-продакшн" table's opt-in list.
+  const [showAddArtProjectMenu, setShowAddArtProjectMenu] = useState(false);
+  const [artAddSearch, setArtAddSearch] = useState('');
+  const addArtProjectMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showAddArtProjectMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (addArtProjectMenuRef.current && !addArtProjectMenuRef.current.contains(e.target as Node)) {
+        setShowAddArtProjectMenu(false);
+        setArtAddSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showAddArtProjectMenu]);
+
   // Review Tasks Mode State
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
   const [reviewTasks, setReviewTasks] = useState<{
@@ -3340,12 +3474,11 @@ export default function App() {
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [reassigning, setReassigning] = useState<{ projectId: string; resourceId: string; role: string } | null>(null);
 
-  const isProjectTab = activeTab.startsWith('projects_') || activeTab === 'projects' || activeTab === 'prototypes' || activeTab === 'releases' || activeTab === 'mhi' || activeTab === 'corps';
-  const isProjectFamilyTab = activeTab.startsWith('projects_') || activeTab === 'projects' || activeTab === 'mhi' || activeTab === 'corps';
+  const isProjectTab = activeTab.startsWith('projects_') || activeTab === 'projects' || activeTab === 'prototypes' || activeTab === 'releases' || activeTab === 'mhi' || activeTab === 'corps' || activeTab === 'no_mhi';
+  const isProjectFamilyTab = activeTab.startsWith('projects_') || activeTab === 'projects' || activeTab === 'mhi' || activeTab === 'corps' || activeTab === 'no_mhi';
   // Placeholder stage tabs — views for these are built one at a time, so for
   // now they just render an empty state instead of falling through to the
   // team/users Gantt rendering that every other unrecognized tab lands on.
-  const isPlaceholderTab = activeTab === 'concept_art' || activeTab === 'devel';
 
   const getUserConflict = (userName: string, projectId: string, resourceId: string) => {
     if (!userName || userName === 'Не назначен') return false;
@@ -3540,8 +3673,11 @@ export default function App() {
       if (activeTab === 'prototypes') return matchesSearch && p.isPrototype;
       if (activeTab === 'projects') return matchesSearch && !p.isPrototype;
       if (activeTab === 'mhi') return matchesSearch && !!p.isMhi;
+      if (activeTab === 'no_mhi') return matchesSearch && !p.isPrototype && !p.isMhi;
       if (activeTab === 'corps') return matchesSearch && (p.segment || '').trim().toLowerCase() === 'корп. заказ';
       if (activeTab === 'edit_layout') return matchesSearch && !!p.inEditorialLayout;
+      if (activeTab === 'devel') return matchesSearch && !!p.inDevelopmentLayout;
+      if (activeTab === 'concept_art') return matchesSearch && !!p.inArtLayout;
 
       if (activeTab.startsWith('projects_')) {
         const yearStr = activeTab.replace('projects_', '');
@@ -3568,6 +3704,26 @@ export default function App() {
       return [...filtered].sort((a, b) => {
         const dateA = (a.printReadyDate ? new Date(a.printReadyDate) : getEditorialPrintDate(a))?.getTime() ?? Infinity;
         const dateB = (b.printReadyDate ? new Date(b.printReadyDate) : getEditorialPrintDate(b))?.getTime() ?? Infinity;
+        return dateA - dateB;
+      });
+    }
+
+    // "Девелопмент" ranks games by "В редактуру" (earliest first), same
+    // reasoning as the editorial table's sort above.
+    if (activeTab === 'devel') {
+      return [...filtered].sort((a, b) => {
+        const dateA = (a.devToEditorialDate ? new Date(a.devToEditorialDate) : getStageStartDate(a, 'Редактирование'))?.getTime() ?? Infinity;
+        const dateB = (b.devToEditorialDate ? new Date(b.devToEditorialDate) : getStageStartDate(b, 'Редактирование'))?.getTime() ?? Infinity;
+        return dateA - dateB;
+      });
+    }
+
+    // "Концептирование и арт-продакшн" ranks games by "В вёрстку" (earliest
+    // first), same reasoning as the editorial table's sort above.
+    if (activeTab === 'concept_art') {
+      return [...filtered].sort((a, b) => {
+        const dateA = (a.artToLayoutDate ? new Date(a.artToLayoutDate) : getStageStartDate(a, 'Дизайн и вёрстка'))?.getTime() ?? Infinity;
+        const dateB = (b.artToLayoutDate ? new Date(b.artToLayoutDate) : getStageStartDate(b, 'Дизайн и вёрстка'))?.getTime() ?? Infinity;
         return dateA - dateB;
       });
     }
@@ -4097,6 +4253,29 @@ export default function App() {
     }
 
     if (!taskToUpdate || !resourceToUpdate) return;
+
+    // СТАРТ ПРОДАЖ can never start before ПРОИЗВОДСТВО ends within the same
+    // "Производство и старт продаж" row — clamp it to bump against
+    // production instead of overlapping. Runs as a final pass over whatever
+    // updatedProject.resources ended up as above, so it applies uniformly
+    // no matter which task was actually edited or how (drag, resize, nudge
+    // buttons, or a locked-project cascade shift) — moving/growing
+    // ПРОИЗВОДСТВО pushes a too-early СТАРТ ПРОДАЖ forward just the same as
+    // dragging СТАРТ ПРОДАЖ backward into it.
+    updatedProject.resources = updatedProject.resources.map(r => {
+      if (r.role !== 'Производство и старт продаж') return r;
+      const prodTask = r.tasks.find(t => t.label?.trim().toUpperCase() === 'ПРОИЗВОДСТВО');
+      if (!prodTask) return r;
+      const productionEnd = addDays(prodTask.startDate, prodTask.duration);
+      return {
+        ...r,
+        tasks: r.tasks.map(t => {
+          if (t.label?.trim().toUpperCase() !== 'СТАРТ ПРОДАЖ' || t.startDate >= productionEnd) return t;
+          if (t.id === taskToUpdate!.id) taskToUpdate = { ...t, startDate: productionEnd };
+          return { ...t, startDate: productionEnd };
+        })
+      };
+    });
 
     // Special logic for overdue -> prepare delay task and show confirmation
     if (updates.status === 'overdue' && (taskToUpdate as any).status === 'overdue') { // check if it JUST became overdue is done by caller usually, but here we can check old state
@@ -4702,11 +4881,7 @@ export default function App() {
         ref={scrollContainerRef}
         className="flex-1 overflow-auto relative scroll-smooth"
       >
-        {isPlaceholderTab ? (
-          <div className="flex items-center justify-center h-full text-slate-400 text-sm font-bold uppercase tracking-widest">
-            Скоро здесь появится содержимое
-          </div>
-        ) : activeTab === 'edit_layout' ? (
+        {activeTab === 'edit_layout' ? (
           <div className="p-6 overflow-auto h-full">
             <table className="w-full border-collapse text-xs">
               <thead>
@@ -4919,6 +5094,381 @@ export default function App() {
               </tbody>
             </table>
           </div>
+        ) : activeTab === 'devel' ? (
+          <div className="p-6 overflow-auto h-full">
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr className="sticky top-0 bg-white z-10 border-b-2 border-slate-400 text-left">
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    <div className="flex items-center gap-2">
+                      <span>Игра</span>
+                      <div className="relative" ref={addDevProjectMenuRef}>
+                        <button
+                          onClick={() => setShowAddDevProjectMenu(!showAddDevProjectMenu)}
+                          className="w-4 h-4 flex items-center justify-center rounded bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition-colors"
+                          title="Добавить проект в таблицу"
+                        >
+                          <Plus size={10} strokeWidth={3} />
+                        </button>
+                        {showAddDevProjectMenu && (
+                          <div className="absolute top-full mt-1 left-0 flex flex-col bg-slate-800 border border-slate-700 rounded-lg shadow-2xl z-[100] w-56 normal-case font-normal">
+                            <div className="p-2 border-b border-slate-700">
+                              <input
+                                autoFocus
+                                type="text"
+                                value={devAddSearch}
+                                onChange={(e) => setDevAddSearch(e.target.value)}
+                                placeholder="Поиск игры..."
+                                className="w-full bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-[10px] text-white placeholder:text-slate-500 outline-none focus:border-indigo-500"
+                              />
+                            </div>
+                            <div className="max-h-64 overflow-y-auto p-1">
+                              {(() => {
+                                const addableProjects = projects
+                                  .filter(p => !p.inDevelopmentLayout && !p.isPrototype && !p.isCollapsed && p.name.toLowerCase().includes(devAddSearch.toLowerCase()))
+                                  .sort((a, b) => getProjectReleaseDate(a).getTime() - getProjectReleaseDate(b).getTime());
+                                if (addableProjects.length === 0) {
+                                  return <div className="px-2 py-3 text-[10px] text-slate-500 text-center">Ничего не найдено</div>;
+                                }
+                                return addableProjects.map(p => (
+                                  <button
+                                    key={p.id}
+                                    onClick={() => updateEditorialField(p.id, { inDevelopmentLayout: true })}
+                                    className="w-full text-[10px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-medium text-slate-200 truncate"
+                                  >
+                                    {p.name}
+                                  </button>
+                                ));
+                              })()}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Вес</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Сегмент</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Импорт</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Девелопер</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Статус</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Девдок</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Комментарий</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">В редактуру</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Старт</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Создание девдока</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Работа над ядром</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Девелопмент игры</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Финализация</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedProjects.map(project => {
+                  const developer = getStageResource(project, 'Девелопмент');
+                  const devStartComputed = getStageStartDate(project, 'Девелопмент');
+                  const toEditorialComputed = getStageStartDate(project, 'Редактирование');
+                  const devStatusInfo = DEV_STATUSES.find(s => s.value === project.devStatus);
+                  const planClass = (isPlan: boolean) => isPlan ? 'opacity-40' : '';
+
+                  return (
+                    <tr key={project.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5 group">
+                          <span
+                            className="font-bold text-indigo-600 cursor-pointer"
+                            onClick={() => { setEditingProjectId(project.id); setModalMode('edit'); }}
+                          >
+                            {project.name}
+                          </span>
+                          <button
+                            onClick={() => updateEditorialField(project.id, { inDevelopmentLayout: false })}
+                            className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all flex-shrink-0"
+                            title="Убрать из таблицы"
+                          >
+                            <X size={11} strokeWidth={2.5} />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">{project.isMhi ? '—' : project.weight}</td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{project.segment || '—'}</td>
+                      <td className="px-3 py-2">
+                        <input
+                          key={`components-${project.id}`}
+                          type="text"
+                          defaultValue={project.componentsNote || ''}
+                          onBlur={(e) => updateEditorialField(project.id, { componentsNote: e.target.value })}
+                          disabled={isReadOnly}
+                          placeholder="—"
+                          className="w-28 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{developer?.name && developer.name !== 'Не назначен' ? developer.name : '—'}</td>
+                      <td className="px-3 py-2">
+                        <select
+                          value={project.devStatus || ''}
+                          onChange={(e) => updateEditorialField(project.id, { devStatus: e.target.value || undefined })}
+                          disabled={isReadOnly}
+                          className={`text-[10px] font-bold uppercase tracking-tighter rounded-full px-2 py-1 outline-none border-none cursor-pointer ${devStatusInfo ? devStatusInfo.className : 'bg-slate-100 text-slate-400'}`}
+                        >
+                          <option value="">—</option>
+                          {DEV_STATUSES.map((s, i) => (
+                            <React.Fragment key={s.value}>
+                              {i === DEV_STATUS_UPPER_GROUP_SIZE && <option disabled>──────────</option>}
+                              <option value={s.value}>{s.value}</option>
+                            </React.Fragment>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          key={`devdoc-${project.id}`}
+                          type="text"
+                          defaultValue={project.devDocNote || ''}
+                          onBlur={(e) => updateEditorialField(project.id, { devDocNote: e.target.value })}
+                          disabled={isReadOnly}
+                          placeholder="—"
+                          className="w-40 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          key={`devcomment-${project.id}`}
+                          type="text"
+                          defaultValue={project.devComment || ''}
+                          onBlur={(e) => updateEditorialField(project.id, { devComment: e.target.value })}
+                          disabled={isReadOnly}
+                          placeholder="—"
+                          className="w-40 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="date"
+                          value={project.devToEditorialDate || (toEditorialComputed ? format(toEditorialComputed, 'yyyy-MM-dd') : '')}
+                          onChange={(e) => updateEditorialField(project.id, { devToEditorialDate: e.target.value || undefined })}
+                          disabled={isReadOnly}
+                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.devToEditorialDate)}`}
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="date"
+                          value={project.devStartDate || (devStartComputed ? format(devStartComputed, 'yyyy-MM-dd') : '')}
+                          onChange={(e) => updateEditorialField(project.id, { devStartDate: e.target.value || undefined })}
+                          disabled={isReadOnly}
+                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.devStartDate)}`}
+                        />
+                      </td>
+                      {DEV_STAGE_DISPLAY_ORDER.map(field => (
+                        <td key={field} className="px-3 py-2">
+                          <input
+                            type="date"
+                            value={project[field] || ''}
+                            onChange={(e) => updateEditorialField(project.id, { [field]: e.target.value || undefined })}
+                            disabled={isReadOnly}
+                            className="bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600"
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : activeTab === 'concept_art' ? (
+          <div className="p-6 overflow-auto h-full">
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr className="sticky top-0 bg-white z-10 border-b-2 border-slate-400 text-left">
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    <div className="flex items-center gap-2">
+                      <span>Игра</span>
+                      <div className="relative" ref={addArtProjectMenuRef}>
+                        <button
+                          onClick={() => setShowAddArtProjectMenu(!showAddArtProjectMenu)}
+                          className="w-4 h-4 flex items-center justify-center rounded bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition-colors"
+                          title="Добавить проект в таблицу"
+                        >
+                          <Plus size={10} strokeWidth={3} />
+                        </button>
+                        {showAddArtProjectMenu && (
+                          <div className="absolute top-full mt-1 left-0 flex flex-col bg-slate-800 border border-slate-700 rounded-lg shadow-2xl z-[100] w-56 normal-case font-normal">
+                            <div className="p-2 border-b border-slate-700">
+                              <input
+                                autoFocus
+                                type="text"
+                                value={artAddSearch}
+                                onChange={(e) => setArtAddSearch(e.target.value)}
+                                placeholder="Поиск игры..."
+                                className="w-full bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-[10px] text-white placeholder:text-slate-500 outline-none focus:border-indigo-500"
+                              />
+                            </div>
+                            <div className="max-h-64 overflow-y-auto p-1">
+                              {(() => {
+                                const addableProjects = projects
+                                  .filter(p => !p.inArtLayout && !p.isPrototype && !p.isCollapsed && p.name.toLowerCase().includes(artAddSearch.toLowerCase()))
+                                  .sort((a, b) => getProjectReleaseDate(a).getTime() - getProjectReleaseDate(b).getTime());
+                                if (addableProjects.length === 0) {
+                                  return <div className="px-2 py-3 text-[10px] text-slate-500 text-center">Ничего не найдено</div>;
+                                }
+                                return addableProjects.map(p => (
+                                  <button
+                                    key={p.id}
+                                    onClick={() => updateEditorialField(p.id, { inArtLayout: true })}
+                                    className="w-full text-[10px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-medium text-slate-200 truncate"
+                                  >
+                                    {p.name}
+                                  </button>
+                                ));
+                              })()}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Вес</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Издатель</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Сегмент</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Импорт</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Арт-директор</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Статус</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Текущая задача</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Комментарий</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">В вёрстку</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Старт</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Составление ТЗ</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Поиск подрядчика</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Согласование стиля</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Отрисовка</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Финализация</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedProjects.map(project => {
+                  const artDirector = getStageResource(project, 'Арт Продакшн');
+                  const artStartComputed = getStageStartDate(project, 'Арт Продакшн');
+                  const toLayoutComputed = getStageStartDate(project, 'Дизайн и вёрстка');
+                  const artStatusInfo = ART_STATUSES.find(s => s.value === project.artStatus);
+                  const planClass = (isPlan: boolean) => isPlan ? 'opacity-40' : '';
+
+                  return (
+                    <tr key={project.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5 group">
+                          <span
+                            className="font-bold text-indigo-600 cursor-pointer"
+                            onClick={() => { setEditingProjectId(project.id); setModalMode('edit'); }}
+                          >
+                            {project.name}
+                          </span>
+                          <button
+                            onClick={() => updateEditorialField(project.id, { inArtLayout: false })}
+                            className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all flex-shrink-0"
+                            title="Убрать из таблицы"
+                          >
+                            <X size={11} strokeWidth={2.5} />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">{project.isMhi ? '—' : project.weight}</td>
+                      <td className="px-3 py-2">
+                        <input
+                          key={`publisher-${project.id}`}
+                          type="text"
+                          defaultValue={project.publisher || ''}
+                          onBlur={(e) => updateEditorialField(project.id, { publisher: e.target.value })}
+                          disabled={isReadOnly}
+                          placeholder="—"
+                          className="w-28 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{project.segment || '—'}</td>
+                      <td className="px-3 py-2">
+                        <input
+                          key={`components-${project.id}`}
+                          type="text"
+                          defaultValue={project.componentsNote || ''}
+                          onBlur={(e) => updateEditorialField(project.id, { componentsNote: e.target.value })}
+                          disabled={isReadOnly}
+                          placeholder="—"
+                          className="w-28 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{artDirector?.name && artDirector.name !== 'Не назначен' ? artDirector.name : '—'}</td>
+                      <td className="px-3 py-2">
+                        <select
+                          value={project.artStatus || ''}
+                          onChange={(e) => updateEditorialField(project.id, { artStatus: e.target.value || undefined })}
+                          disabled={isReadOnly}
+                          className={`text-[10px] font-bold uppercase tracking-tighter rounded-full px-2 py-1 outline-none border-none cursor-pointer ${artStatusInfo ? artStatusInfo.className : 'bg-slate-100 text-slate-400'}`}
+                        >
+                          <option value="">—</option>
+                          {ART_STATUSES.map((s, i) => (
+                            <React.Fragment key={s.value}>
+                              {i === ART_STATUS_UPPER_GROUP_SIZE && <option disabled>──────────</option>}
+                              <option value={s.value}>{s.value}</option>
+                            </React.Fragment>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          key={`arttask-${project.id}`}
+                          type="text"
+                          defaultValue={project.artTaskNote || ''}
+                          onBlur={(e) => updateEditorialField(project.id, { artTaskNote: e.target.value })}
+                          disabled={isReadOnly}
+                          placeholder="—"
+                          className="w-40 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          key={`artcomment-${project.id}`}
+                          type="text"
+                          defaultValue={project.artComment || ''}
+                          onBlur={(e) => updateEditorialField(project.id, { artComment: e.target.value })}
+                          disabled={isReadOnly}
+                          placeholder="—"
+                          className="w-40 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="date"
+                          value={project.artToLayoutDate || (toLayoutComputed ? format(toLayoutComputed, 'yyyy-MM-dd') : '')}
+                          onChange={(e) => updateEditorialField(project.id, { artToLayoutDate: e.target.value || undefined })}
+                          disabled={isReadOnly}
+                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.artToLayoutDate)}`}
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="date"
+                          value={project.artStartDate || (artStartComputed ? format(artStartComputed, 'yyyy-MM-dd') : '')}
+                          onChange={(e) => updateEditorialField(project.id, { artStartDate: e.target.value || undefined })}
+                          disabled={isReadOnly}
+                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.artStartDate)}`}
+                        />
+                      </td>
+                      {ART_STAGE_DISPLAY_ORDER.map(field => (
+                        <td key={field} className="px-3 py-2">
+                          <input
+                            type="date"
+                            value={project[field] || ''}
+                            onChange={(e) => updateEditorialField(project.id, { [field]: e.target.value || undefined })}
+                            disabled={isReadOnly}
+                            className="bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600"
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         ) : (
         <div className="inline-flex min-w-full">
           {/* Static Columns */}
@@ -4936,6 +5486,7 @@ export default function App() {
                           >
                             {activeTab === 'projects' ? 'Все проекты' :
                              activeTab === 'mhi' ? 'МХИ' :
+                             activeTab === 'no_mhi' ? 'Проекты без МХИ' :
                              activeTab === 'corps' ? 'Корпы' :
                              `Проекты ${activeTab.replace('projects_', '')}`}
                             <ChevronDown size={12} strokeWidth={3} />
@@ -4954,6 +5505,12 @@ export default function App() {
                                 className={`text-[9px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-bold uppercase tracking-tighter ${activeTab === 'mhi' ? 'text-indigo-300 bg-white/5' : 'text-slate-300'}`}
                               >
                                 МХИ
+                              </button>
+                              <button
+                                onClick={() => { setActiveTab('no_mhi'); setShowProjectTabsMenu(false); }}
+                                className={`text-[9px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-bold uppercase tracking-tighter ${activeTab === 'no_mhi' ? 'text-indigo-300 bg-white/5' : 'text-slate-300'}`}
+                              >
+                                Проекты без МХИ
                               </button>
                               <button
                                 onClick={() => { setActiveTab('corps'); setShowProjectTabsMenu(false); }}
@@ -5906,26 +6463,41 @@ export default function App() {
                               onDelete={() => deleteTask(project.id, resource.id, task.id)}
                               projectWeight={project.weight}
                               role={resource.role}
-                              dimmed={resource.role === 'Редактирование' || resource.role === 'Дизайн и вёрстка'}
+                              dimmed={resource.role === 'Редактирование' || resource.role === 'Дизайн и вёрстка' || resource.role === 'Девелопмент' || resource.role === 'Арт Продакшн'}
                             />
                           ))}
                           {(() => {
                             // "Факт" overlay: a synthetic, read-only bar (not a stored Task)
                             // showing real progress against the "план" bars above, per the
-                            // editorial-table's Старт / Старт вёрстки / В печать fields — see
-                            // CLAUDE.md "Редактура и вёрстка" section for the field meanings.
+                            // editorial-table's Старт / Старт вёрстки / В печать fields (and
+                            // the "Девелопмент"/"Концептирование и арт-продакшн" tabs' own
+                            // Старт / В редактуру / В вёрстку fields) — see CLAUDE.md for the
+                            // field meanings.
                             const factStartRaw = resource.role === 'Редактирование' ? project.editStartDate
                               : resource.role === 'Дизайн и вёрстка' ? project.layoutStartDate
+                              : resource.role === 'Девелопмент' ? project.devStartDate
+                              : resource.role === 'Арт Продакшн' ? project.artStartDate
                               : null;
                             if (!factStartRaw) return null;
                             const factStart = new Date(factStartRaw);
-                            const factEndRaw = project.printReadyDate ? new Date(project.printReadyDate) : new Date();
+                            const factEndRaw = resource.role === 'Девелопмент'
+                              ? (project.devToEditorialDate ? new Date(project.devToEditorialDate) : new Date())
+                              : resource.role === 'Арт Продакшн'
+                              ? (project.artToLayoutDate ? new Date(project.artToLayoutDate) : new Date())
+                              : (project.printReadyDate ? new Date(project.printReadyDate) : new Date());
                             const factEnd = factEndRaw < factStart ? factStart : factEndRaw;
                             const factLeft = (differenceInDays(factStart, timelineStart) / 7) * cellWidth;
                             const factWidth = Math.max((differenceInDays(factEnd, factStart) / 7) * cellWidth, 6);
                             if (factLeft + factWidth < 0 || factLeft > weeks.length * cellWidth) return null;
-                            const factColor = resource.role === 'Редактирование' ? 'bg-sky-600 border-sky-700' : 'bg-emerald-600 border-emerald-700';
-                            const factLabel = getEditorialFactLabel(project, resource.role as 'Редактирование' | 'Дизайн и вёрстка');
+                            const factColor = resource.role === 'Редактирование' ? 'bg-sky-600 border-sky-700'
+                              : resource.role === 'Дизайн и вёрстка' ? 'bg-emerald-600 border-emerald-700'
+                              : resource.role === 'Девелопмент' ? 'bg-purple-600 border-purple-700'
+                              : 'bg-rose-600 border-rose-700';
+                            const factLabel = resource.role === 'Девелопмент'
+                              ? getDevFactLabel(project)
+                              : resource.role === 'Арт Продакшн'
+                              ? getArtFactLabel(project)
+                              : getEditorialFactLabel(project, resource.role as 'Редактирование' | 'Дизайн и вёрстка');
                             return (
                               <div
                                 className={`absolute rounded border ${factColor} pointer-events-none z-10 flex items-center px-1.5 text-[9px] font-black text-white uppercase tracking-tighter truncate`}
@@ -6064,7 +6636,7 @@ export default function App() {
                 onClick={() => setActiveTab('concept_art')}
                 className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'concept_art' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
               >
-                Концептирование и арт-продакшн
+                Арт-продакшн
               </button>
               <button
                 onClick={() => setActiveTab('devel')}

@@ -2343,7 +2343,8 @@
     "layoutStartDate": "2026-08-26",
     "editorialStatus": "Препресс",
     "tzLayoutDate": "2026-07-30",
-    "publisher": ""
+    "publisher": "",
+    "currentTaskNote": ""
   },
   {
     "id": "3t28yf665",
@@ -2806,7 +2807,7 @@
             "color": "gray",
             "label": "ПРОИЗВОДСТВО",
             "status": "started",
-            "duration": 42,
+            "duration": 49,
             "startDate": "2026-07-21T00:00:00.000Z"
           },
           {
@@ -2815,7 +2816,7 @@
             "label": "СТАРТ ПРОДАЖ",
             "status": "neutral",
             "duration": 14,
-            "startDate": "2026-08-28T00:00:00.000Z"
+            "startDate": "2026-09-08T00:00:00.000Z"
           }
         ],
         "isSpecialRow": true
@@ -3129,7 +3130,7 @@
             "label": "СТАРТ ПРОДАЖ",
             "status": "neutral",
             "duration": 14,
-            "startDate": "2026-09-04T00:00:00.000Z"
+            "startDate": "2026-09-11T00:00:00.000Z"
           }
         ],
         "isSpecialRow": true
@@ -16360,6 +16361,10 @@
     "hasSmallBatch": false,
     "sortOrder": 135,
     "inEditorialLayout": true,
-    "publisher": ""
+    "publisher": "",
+    "inDevelopmentLayout": false,
+    "printReadyDate": "2027-05-05",
+    "editStartDate": "2027-01-25",
+    "inArtLayout": true
   }
 ]

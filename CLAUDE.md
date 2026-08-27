@@ -1,10 +1,11 @@
 # Студия разработки / Hobby World Planner
 
 React/Vite/Express task-planning web app for a board-game studio's production
-pipeline (Проекты, МХИ, Корпы, Прототипы, Релизы, Сотрудники, Редактура и
-вёрстка). This file is a handoff written mid-session — read it fully before
-making changes, since it documents non-obvious business rules that aren't
-visible just from reading the code.
+pipeline (Проекты, МХИ, Корпы, Прототипы, Релизы, Сотрудники, Концептирование
+и арт-продакшн, Девелопмент, Редактура и вёрстка). This file is a handoff
+written mid-session — read it fully before making changes, since it
+documents non-obvious business rules that aren't visible just from reading
+the code.
 
 ## Stack & running it
 
@@ -87,6 +88,21 @@ see below):
    own duration is *derived*: `dForce['Арт Продакшн'] = dForce['Девелопмент']
    + dForce['Редактирование'] - dForce['Дизайн и вёрстка']`).
 3. Редактирование and Дизайн и вёрстка always **finish on the same day**.
+4. СТАРТ ПРОДАЖ never starts before ПРОИЗВОДСТВО ends, within the same
+   "Производство и старт продаж" special row. Unlike 1–3, which only hold
+   at generation time (`ProjectModal`'s `handleSubmit`), this one is
+   enforced **live**, in `updateTask` (`App.tsx`): after every task edit,
+   a final pass finds that resource by role, and if СТАРТ ПРОДАЖ's start
+   precedes ПРОИЗВОДСТВО's end, clamps it forward to bump flush against
+   production instead of overlapping — duration is left untouched, so a
+   plain drag/move slides the whole bar forward keeping its length, while
+   growing ПРОИЗВОДСТВО pushes a too-early СТАРТ ПРОДАЖ forward the same
+   way. Applies regardless of *which* task was actually edited or how
+   (drag, resize, nudge buttons, locked-project cascade shift) — it's a
+   final invariant check on `updatedProject.resources`, not tied to one
+   interaction path. By explicit request; don't relax it into a
+   drag-time-only constraint that a resize or a locked cascade could still
+   slip past.
 
 Weight key normalization: `normalizeWeightKey` / the `ruWeight` pattern
 handles Cyrillic Н vs Latin H interchangeably; `'5Н'` has no distinct
@@ -188,7 +204,15 @@ rendered as its own branch in the main content area. Key points:
   the Дизайн и вёрстка row's. Its end date is `project.printReadyDate` if
   set, else **today** — recomputed on every render, so the bar visibly grows
   day by day until "В печать" is filled in, at which point it snaps to that
-  date and stops growing. This is intentionally a live progress indicator
+  date and stops growing. Because the факт bar sits low in the row
+  (`top: 26`) and the план bar's own hover controls (`TaskBlock`'s 4 nudge/
+  resize buttons, positioned at `left-[-44px]`/`left-[-14px]`/
+  `right-[-14px]`/`right-[-44px]`) used to be vertically centered
+  (`top-1/2 -translate-y-1/2`) on the план bar's full height, they'd land
+  right behind the факт bar and be unreachable — those 4 buttons now switch
+  to `top-0` (level with the label text, which itself sits at the top via
+  the `dimmed` → `items-start` change above) whenever `dimmed` is true, and
+  stay vertically centered otherwise. This is intentionally a live progress indicator
   against the plan, not a stored/editable task.
 - **Факт bar label** (`getEditorialFactLabel`, next to `EDITORIAL_STATUSES`):
   not a static "Факт" — it names whichever stage was most recently reached,
@@ -211,21 +235,136 @@ rendered as its own branch in the main content area. Key points:
 
 ## Other recent features worth knowing about
 
-- **МХИ / Корпы tabs**: filter by `project.isMhi` / `segment === 'корп.
-  заказ'`. Live inside the "Проекты" dropdown (see below), not separate
-  footer tabs.
+- **МХИ / Корпы / "Проекты без МХИ" tabs**: filter by `project.isMhi` /
+  `segment === 'корп. заказ'` / `!project.isMhi && !project.isPrototype`
+  (`activeTab === 'no_mhi'`) respectively. Live inside the "Проекты"
+  dropdown (see below), not separate footer tabs. `no_mhi` deliberately
+  does **not** use a `projects_` prefix like the year tabs do — the
+  `sortedProjects` year-filter branch does `activeTab.startsWith('projects_')`
+  then `parseInt(activeTab.replace('projects_', ''))`, which would silently
+  break (`NaN` year) if this tab were named e.g. `projects_no_mhi`.
 - **"Проекты" dropdown**: footer has exactly 4 tabs — Проекты, Прототипы,
   Релизы, Сотрудники. Clicking "Проекты" just activates the family; the
-  actual dropdown (Все проекты / МХИ / Корпы / Проекты <year> / + Добавить
+  actual dropdown (Все проекты / МХИ / Проекты без МХИ / Корпы / Проекты
+  <year> / + Добавить
   год) lives in the sidebar header, **above the search box**, not attached
   to the footer button itself — this placement was corrected twice by the
   user, don't move it back to the footer.
-- **Placeholder tabs**: "Концептирование и арт-продакшн" and "Девелопмент"
-  (footer, right of the divider next to "Редактура и вёрстка") are still
-  empty (`isPlaceholderTab` → "Скоро здесь появится содержимое"). These are
-  the next two to build, same general shape as "Редактура и вёрстка"
-  presumably, but **ask the user what each should actually show** before
-  building — don't assume it mirrors the editorial table structure.
+## "Девелопмент" tab (`activeTab === 'devel'`)
+
+Deliberately built as a near-clone of "Редактура и вёрстка" — same flat
+`<table>` shape, same opt-in-list / "+" picker / faded-plan / below-line-
+status-override mechanics — with these differences, all by explicit
+request:
+
+- **Opt-in list**: `project.inDevelopmentLayout`, not `inEditorialLayout` —
+  a project can be in both tables independently, so none of this tab's
+  fields are shared with the editorial ones, even where conceptually
+  parallel (`devStatus` vs `editorialStatus`, `devDocNote` vs
+  `currentTaskNote`, `devComment` vs `editorialComment`, `devStartDate` vs
+  `editStartDate`, `devToEditorialDate` vs `printReadyDate`). Editing one
+  table must never leak into the other's display for the same project.
+- **14 columns**, in this order: Игра, Вес, Сегмент, Импорт
+  (`componentsNote` — shared with editorial, it's a plain project-level
+  fact, not stage-specific; unlike editorial this table has **no**
+  "Издатель" column — explicitly removed by request, don't re-add it),
+  Девелопер (one column, not Редактор+Дизайнер — `getStageResource(project,
+  'Девелопмент')`), Статус, Девдок (`devDocNote`, free text — renamed from
+  "Текущая задача"), Комментарий (`devComment`), В редактуру
+  (`devToEditorialDate` override else `getStageStartDate(project,
+  'Редактирование')`), Старт (`devStartDate` override else
+  `getStageStartDate(project, 'Девелопмент')`), then 4 stage columns:
+  Создание девдока / Работа над ядром / Девелопмент игры / Финализация
+  (`devDocDate`/`devCoreDate`/`devGameDate`/`devFinalizationDate`,
+  `DEV_STAGE_DISPLAY_ORDER`).
+- **No regulatory plan chain at all** for those 4 stage columns — every
+  project here is treated like a МХИ project in the editorial table:
+  always blank until manually filled in, no faded suggested dates, no
+  `opacity-40` styling (there's no "plan" value to be faded relative to).
+  Only Старт and В редактуру get the faded-until-edited treatment, same as
+  editorial's Старт/В печать.
+- **`DEV_STATUSES`** (6 values): Девелопмент, Тестирование, Финализация,
+  Согласование, Затык, Сдано — own list, own divider
+  (`DEV_STATUS_UPPER_GROUP_SIZE = 3`), own below-line override set
+  (`DEV_BELOW_LINE_STATUSES`). Not merged with `EDITORIAL_STATUSES` despite
+  overlapping words ("Тестирование", "Финализация" vs "Пост-вёрстка") —
+  different workflow, different vocabulary.
+- **`getDevFactLabel(project)`**: single-chain version of
+  `getEditorialFactLabel` (one resource — Девелопмент — instead of two).
+  Progression: Старт filled → "Создание девдока" → (that filled) "Работа
+  над ядром" → (that filled) "Девелопмент игры" → (that filled)
+  "Финализация" → (Финализация filled) "Сдано". A `devStatus` in
+  `DEV_BELOW_LINE_STATUSES` overrides this outright, same mechanics as
+  editorial. The intermediate labels are literally the column names, since
+  (unlike editorial) no separate label vocabulary was specified — don't
+  invent bespoke phrasing here without checking first.
+- **Sort**: rows rank by ascending "В редактуру"
+  (`devToEditorialDate`/`getStageStartDate(·, 'Редактирование')`), same
+  reasoning/shape as editorial's sort-by-"В печать".
+- **Проекты tab Gantt integration**: the "Девелопмент" resource row is now
+  *always* dimmed there (`TaskBlock`'s `dimmed` prop), and gets its own
+  "Факт" overlay bar (purple — `bg-purple-600 border-purple-700`, matching
+  `getTaskColor`'s purple for this stage) driven by `devStartDate` →
+  `devToEditorialDate` (else today, growing) — same overlay mechanism as
+  the editorial rows', just a third branch in the same block rather than a
+  separate implementation.
+- Reuses `updateEditorialField` for all writes (it's field-name-agnostic —
+  `{...p, ...updates}` — despite the name); no `updateDevField` was added
+  to avoid an unnecessary duplicate of identical logic.
+
+## "Концептирование и арт-продакшн" tab (`activeTab === 'concept_art'`)
+
+Formerly the last placeholder tab (`isPlaceholderTab` has been removed
+entirely now that both it and "Девелопмент" are built) — another near-clone
+of "Редактура и вёрстка", built the same way as "Девелопмент" above, but
+targeting a single **Арт Продакшн** resource, not Концептирование despite
+the tab's name covering both — this was explicit and confirmed twice across
+the request (once for the "Арт-директор" column, once for the "Старт"
+column's source), don't reinterpret it to also cover Концептирование
+without checking first.
+
+- **Opt-in list**: `project.inArtLayout`. Own fields throughout
+  (`artStatus`, `artTaskNote`, `artComment`, `artStartDate`,
+  `artToLayoutDate`, `artTzDate`, `artContractorDate`, `artStyleDate`,
+  `artDrawingDate`, `artFinalizationDate`) — same independence rationale as
+  the Девелопмент fields.
+- **16 columns**, in this order: Игра, Вес, Издатель, Сегмент, Импорт
+  (`publisher`/`componentsNote`, shared with editorial — unlike the
+  Девелопмент tab, "Издатель" **is** present here; it was never asked to be
+  removed from this tab), Арт-директор (`getStageResource(project, 'Арт
+  Продакшн')`), Статус, Текущая задача (`artTaskNote` — **not** renamed,
+  unlike Девелопмент's "Девдок"; the underlying field is still separate
+  from editorial's `currentTaskNote` even though the label matches), Комментарий
+  (`artComment`), В вёрстку (`artToLayoutDate` override else
+  `getStageStartDate(project, 'Дизайн и вёрстка')`), Старт (`artStartDate`
+  override else `getStageStartDate(project, 'Арт Продакшн')`), then 5 stage
+  columns: Составление ТЗ / Поиск подрядчика / Согласование стиля /
+  Отрисовка / Финализация
+  (`artTzDate`/`artContractorDate`/`artStyleDate`/`artDrawingDate`/
+  `artFinalizationDate`, `ART_STAGE_DISPLAY_ORDER`).
+- **No regulatory plan chain** for those 5 stage columns, same МХИ-style
+  always-blank-until-filled rule as Девелопмент's 4.
+- **`ART_STATUSES`** (6 values): Составление ТЗ, Поиск подрядчика,
+  Отрисовка, Согласование, Затык, Сдано — own list, own divider
+  (`ART_STATUS_UPPER_GROUP_SIZE = 3`), own below-line override set
+  (`ART_BELOW_LINE_STATUSES`). Note the upper group reuses 3 of the 5 stage
+  column names verbatim (Составление ТЗ, Поиск подрядчика, Отрисовка) but
+  skips "Согласование стиля" and "Финализация" — that's exactly what was
+  specified, not an oversight; don't "complete the set" by adding them.
+- **`getArtFactLabel(project)`**: same shape as `getDevFactLabel`.
+  Progression: Старт filled → "Составление ТЗ" → (filled) "Поиск
+  подрядчика" → (filled) "Согласование стиля" → (filled) "Отрисовка" →
+  (filled) "Финализация" → (Финализация filled) "Сдано". `artStatus` in
+  `ART_BELOW_LINE_STATUSES` overrides outright, same mechanics as
+  Девелопмент/editorial.
+- **Sort**: rows rank by ascending "В вёрстку"
+  (`artToLayoutDate`/`getStageStartDate(·, 'Дизайн и вёрстка')`).
+- **Проекты tab Gantt integration**: "Арт Продакшн" resource row is now
+  *always* dimmed, with its own факт overlay (rose —
+  `bg-rose-600 border-rose-700`, matching `getTaskColor`'s 'red' for this
+  stage) driven by `artStartDate` → `artToLayoutDate` (else today,
+  growing) — a fourth branch alongside Редактирование/Дизайн-и-вёрстка/
+  Девелопмент in the same block.
 - **Row numbering** in project lists, **collapsed-projects/collapsed-users
   sort to the bottom** everywhere (footer "sort by release date" button,
   and the employees tab), **task comments** (small popover, rendered via a
