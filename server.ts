@@ -177,6 +177,30 @@ async function startServer() {
     }
   }
 
+  // Daily automatic backups (9am) — see initializeAutoBackupSchedule below.
+  // Local file is a fallback mirror of the "backups" DB table, same dual-write
+  // pattern as projects/users, capped to the newest MAX_BACKUPS entries.
+  const BACKUPS_FILE = path.join(DATA_DIR, "backups.json");
+  const MAX_BACKUPS = 7;
+
+  function readLocalBackups(): any[] {
+    if (!fs.existsSync(BACKUPS_FILE)) return [];
+    try {
+      return JSON.parse(fs.readFileSync(BACKUPS_FILE, 'utf-8'));
+    } catch (err) {
+      console.warn("Failed to read local backups:", err);
+      return [];
+    }
+  }
+
+  function writeLocalBackups(backups: any[]) {
+    try {
+      fs.writeFileSync(BACKUPS_FILE, JSON.stringify(backups, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn("Failed to write local backups:", err);
+    }
+  }
+
   // Shared pool instance and database connection state
   let sharedPool: pg.Pool | null = null;
   let isDbConnected = false;
@@ -317,6 +341,11 @@ async function startServer() {
               name TEXT NOT NULL,
               data JSONB NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS backups (
+              id TEXT PRIMARY KEY,
+              created_at TIMESTAMPTZ NOT NULL,
+              data JSONB NOT NULL
+            );
           `);
           console.log("Database tables initialized successfully.");
 
@@ -348,6 +377,185 @@ async function startServer() {
   // Start background database initialization
   initializeDbAsync().catch((err) => {
     console.error("Unhandled error during background database initialization:", err);
+  });
+
+  // --- Daily automatic backups ---
+  // Snapshots whatever is currently authoritative (DB if connected, else the
+  // local JSON files) and stores it as a new backup, then prunes down to the
+  // newest MAX_BACKUPS — both in the "backups" table and in the local mirror
+  // file, mirroring the dual-write pattern used for projects/users above.
+  async function getCurrentProjectsAndUsers(): Promise<{ projects: any[]; users: any[] }> {
+    if (isDbConnected) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          const [projectsResult, usersResult] = await Promise.all([
+            pool.query("SELECT data FROM projects"),
+            pool.query("SELECT data FROM users"),
+          ]);
+          return {
+            projects: projectsResult.rows.map((r) => r.data),
+            users: usersResult.rows.map((r) => r.data),
+          };
+        } catch (err) {
+          console.warn("Failed to read current data from database for backup, falling back to local files:", err);
+        }
+      }
+    }
+    return { projects: readLocalProjects(), users: readLocalUsers() };
+  }
+
+  async function createBackup(): Promise<{ id: string; createdAt: string }> {
+    const { projects, users } = await getCurrentProjectsAndUsers();
+    const id = `backup_${Date.now()}`;
+    const createdAt = new Date().toISOString();
+
+    const localBackups = readLocalBackups();
+    localBackups.unshift({ id, createdAt, projects, users });
+    writeLocalBackups(localBackups.slice(0, MAX_BACKUPS));
+
+    if (isDbConnected) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          await pool.query(
+            "INSERT INTO backups (id, created_at, data) VALUES ($1, $2, $3)",
+            [id, createdAt, JSON.stringify({ projects, users })]
+          );
+          // Prune anything past the newest MAX_BACKUPS rows.
+          await pool.query(
+            `DELETE FROM backups WHERE id IN (
+               SELECT id FROM backups ORDER BY created_at DESC OFFSET $1
+             )`,
+            [MAX_BACKUPS]
+          );
+        } catch (err) {
+          console.warn("Failed to save backup to database:", err);
+        }
+      }
+    }
+
+    console.log(`[Backup] Created ${id} at ${createdAt}`);
+    return { id, createdAt };
+  }
+
+  // Fires once per calendar day, at or after 9am server-local time. Tracks
+  // the last backup's date (seeded from the newest stored backup at startup,
+  // local-file-only since this runs before the DB connection settles) so a
+  // process restart on the same day after 9am doesn't create a duplicate.
+  function dateKeyOf(d: Date): string {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function initializeAutoBackupSchedule() {
+    const AUTO_BACKUP_HOUR = 9;
+    const existing = readLocalBackups();
+    let lastBackupDateKey = existing.length > 0 ? dateKeyOf(new Date(existing[0].createdAt)) : null;
+
+    setInterval(() => {
+      const now = new Date();
+      const todayKey = dateKeyOf(now);
+      if (now.getHours() >= AUTO_BACKUP_HOUR && lastBackupDateKey !== todayKey) {
+        lastBackupDateKey = todayKey;
+        createBackup().catch((err) => console.error("Scheduled backup failed:", err));
+      }
+    }, 60 * 1000);
+
+    console.log(`[Backup] Auto-backup scheduler started (daily at ${AUTO_BACKUP_HOUR}:00 server time, keeping last ${MAX_BACKUPS}).`);
+  }
+
+  initializeAutoBackupSchedule();
+
+  // List available backups (metadata only — id + timestamp, not the full
+  // snapshot payload, so the "Импорт" dropdown can render this cheaply).
+  app.get("/api/backups", async (req, res) => {
+    if (isDbConnected) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          const result = await pool.query(
+            "SELECT id, created_at FROM backups ORDER BY created_at DESC LIMIT $1",
+            [MAX_BACKUPS]
+          );
+          return res.json(result.rows.map((r) => ({ id: r.id, createdAt: r.created_at })));
+        } catch (err) {
+          console.warn("Failed to list backups from database, falling back to local:", err);
+        }
+      }
+    }
+    const localBackups = readLocalBackups();
+    res.json(localBackups.map((b) => ({ id: b.id, createdAt: b.createdAt })));
+  });
+
+  // Restore a backup: replaces ALL current projects/users, in both the
+  // database (if connected) and the local fallback files, from that
+  // snapshot. The frontend is expected to reload after this succeeds.
+  app.post("/api/backups/:id/restore", async (req, res) => {
+    const { id } = req.params;
+    let snapshot: { projects: any[]; users: any[] } | null = null;
+
+    if (isDbConnected) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          const result = await pool.query("SELECT data FROM backups WHERE id = $1", [id]);
+          if (result.rows.length > 0) {
+            snapshot = result.rows[0].data;
+          }
+        } catch (err) {
+          console.warn("Failed to load backup from database, falling back to local:", err);
+        }
+      }
+    }
+
+    if (!snapshot) {
+      const found = readLocalBackups().find((b) => b.id === id);
+      if (found) snapshot = { projects: found.projects, users: found.users };
+    }
+
+    if (!snapshot) {
+      return res.status(404).json({ success: false, error: "Backup not found" });
+    }
+
+    writeLocalProjects(snapshot.projects);
+    writeLocalUsers(snapshot.users);
+
+    if (isDbConnected) {
+      const pool = getPool();
+      if (pool) {
+        try {
+          const client = await pool.connect();
+          try {
+            await client.query("BEGIN");
+            await client.query("DELETE FROM projects");
+            await client.query("DELETE FROM users");
+            for (const project of snapshot.projects) {
+              await client.query(
+                "INSERT INTO projects (id, name, status, data) VALUES ($1, $2, $3, $4)",
+                [project.id, project.name, project.status || "active", JSON.stringify(project)]
+              );
+            }
+            for (const user of snapshot.users) {
+              await client.query(
+                "INSERT INTO users (id, name, data) VALUES ($1, $2, $3)",
+                [user.id, user.name, JSON.stringify(user)]
+              );
+            }
+            await client.query("COMMIT");
+          } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+          } finally {
+            client.release();
+          }
+        } catch (err) {
+          console.warn("Failed to restore backup to database (local files were still restored):", err);
+          return res.json({ success: true, mode: "local-only" });
+        }
+      }
+    }
+
+    res.json({ success: true });
   });
 
   // Database status endpoint

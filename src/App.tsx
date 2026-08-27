@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -18,7 +19,6 @@ import {
   Sparkles,
   Calendar,
   MoreVertical,
-  Type,
   Trash2,
   X,
   Upload,
@@ -221,6 +221,21 @@ interface Project {
   isCollapsed?: boolean;
   hasForeignComponents?: boolean;
   hasSmallBatch?: boolean;
+  componentsNote?: string;
+  editorialStatus?: string;
+  currentTaskNote?: string;
+  editorialComment?: string;
+  tzLayoutDate?: string;
+  editStartDate?: string;
+  printReadyDate?: string;
+  inEditorialLayout?: boolean;
+  rulesDate?: string;
+  layoutStartDate?: string;
+  componentsLayoutDate?: string;
+  boxLayoutDate?: string;
+  rulesLayoutDate?: string;
+  approvalDate?: string;
+  postLayoutDate?: string;
 }
 
 interface User {
@@ -308,6 +323,140 @@ const ROLES = {
   EDITOR: 'Редактор',
   LAYOUT_ARTIST: 'Верстальщик'
 } as const;
+
+const EDITORIAL_STATUSES: { value: string; className: string }[] = [
+  { value: 'Арт', className: 'bg-green-100 text-green-700' },
+  { value: 'Редактура', className: 'bg-rose-100 text-rose-700' },
+  { value: 'Дизайн', className: 'bg-fuchsia-100 text-fuchsia-700' },
+  { value: 'Вёрстка', className: 'bg-purple-100 text-purple-700' },
+  { value: 'Тестирование', className: 'bg-cyan-100 text-cyan-700' },
+  { value: 'Пост-вёрстка', className: 'bg-emerald-100 text-emerald-700' },
+  { value: 'Согласование', className: 'bg-sky-100 text-sky-700' },
+  { value: 'Затык', className: 'bg-red-100 text-red-700' },
+  { value: 'Ждём тираж', className: 'bg-amber-100 text-amber-700' },
+  { value: 'Препресс', className: 'bg-indigo-100 text-indigo-700' },
+  { value: 'Сдано', className: 'bg-teal-100 text-teal-700' },
+];
+
+// In the "Редактура и вёрстка" status dropdown, everything through
+// "Пост-вёрстка" renders above a visual divider, the rest below — see
+// CLAUDE.md for why "Тестирование" sits in the upper group.
+const EDITORIAL_STATUS_UPPER_GROUP_SIZE = 6;
+
+// The statuses below that divider (Согласование/Затык/Ждём тираж/Сдано)
+// aren't tied to a single stage, so when one of them is set it overrides
+// the stage-derived "Факт" bar label on the Проекты tab for both the
+// Редактирование and Дизайн-и-вёрстка rows — see getEditorialFactLabel.
+const EDITORIAL_BELOW_LINE_STATUSES = EDITORIAL_STATUSES.slice(EDITORIAL_STATUS_UPPER_GROUP_SIZE).map(s => s.value);
+
+// Label for the "Факт" overlay bar on the Проекты tab's Gantt: reflects
+// whichever editorial-table date column was most recently filled in for
+// that stage (Редактирование vs Дизайн и вёрстка chase different column
+// chains), unless editorialStatus is one of EDITORIAL_BELOW_LINE_STATUSES,
+// which overrides both rows' labels outright. Checked from the most
+// advanced state backward so it's correct even if earlier columns in the
+// chain were skipped.
+const getEditorialFactLabel = (project: Project, role: 'Редактирование' | 'Дизайн и вёрстка'): string => {
+  if (project.editorialStatus && EDITORIAL_BELOW_LINE_STATUSES.includes(project.editorialStatus)) {
+    return project.editorialStatus;
+  }
+  if (role === 'Редактирование') {
+    if (project.postLayoutDate) return 'Сдано';
+    if (project.rulesDate) return 'Менеджмент вёрстки';
+    if (project.tzLayoutDate) return 'Написание правил';
+    return 'ТЗ на вёрстку';
+  }
+  if (project.postLayoutDate) return 'Сдано';
+  if (project.rulesLayoutDate) return 'Согласование и пост-вёрстка';
+  if (project.boxLayoutDate) return 'Вёрстка правил';
+  if (project.componentsLayoutDate) return 'Вёрстка коробки';
+  return 'Вёрстка компонентов';
+};
+
+// Working-day durations for each auto-planned stage in the "Редактура и
+// вёрстка" table, keyed by project weight. Each stage's plan date is the
+// previous stage's plan date plus its own entry here (a running chain that
+// starts from "Старт"), matching the fixed order the columns are shown in.
+const EDITORIAL_PLAN_DAYS: Record<string, Record<string, number>> = {
+  tzLayoutDate: { '1': 6, '2': 8, '3': 12, '3Н': 20, '4': 15, '5': 17 },
+  rulesDate: { '1': 7, '2': 12, '3': 15, '3Н': 12, '4': 22, '5': 32 },
+  componentsLayoutDate: { '1': 5, '2': 10, '3': 15, '3Н': 25, '4': 25, '5': 40 },
+  boxLayoutDate: { '1': 5, '2': 6, '3': 6, '3Н': 7, '4': 7, '5': 8 },
+  rulesLayoutDate: { '1': 3, '2': 6, '3': 10, '3Н': 6, '4': 15, '5': 20 },
+  approvalDate: { '1': 10, '2': 10, '3': 10, '3Н': 10, '4': 14, '5': 14 },
+  postLayoutDate: { '1': 5, '2': 5, '3': 5, '3Н': 5, '4': 5, '5': 5 },
+};
+
+const EDITORIAL_PLAN_CHAIN_ORDER = ['tzLayoutDate', 'rulesDate', 'componentsLayoutDate', 'boxLayoutDate', 'rulesLayoutDate', 'approvalDate', 'postLayoutDate'] as const;
+
+// "Старт вёрстки" isn't part of the cumulative chain above — by regulation it
+// always starts 1 working day after "ТЗ на вёрстку" regardless of weight, not
+// after "Правила" even though it's displayed between those two columns.
+const EDITORIAL_PLAN_DISPLAY_ORDER = ['tzLayoutDate', 'rulesDate', 'layoutStartDate', 'componentsLayoutDate', 'boxLayoutDate', 'rulesLayoutDate', 'approvalDate', 'postLayoutDate'] as const;
+
+// "3Н"/"3H" (Cyrillic vs Latin Н) both occur in the data; "5Н" has no row of
+// its own in the table above, so it falls back to the plain "5" durations.
+const normalizeWeightKey = (weight: number | string): string => {
+  const w = String(weight).trim().toUpperCase().replace('H', 'Н');
+  if (w === '5Н') return '5';
+  return w;
+};
+
+const isRussianHoliday = (date: Date): boolean => {
+  const holidays = getRussianHolidaysForYear(date.getFullYear());
+  return holidays.some(h => date >= new Date(h.startDate) && date < new Date(h.endDate));
+};
+
+const isWorkingDay = (date: Date): boolean => {
+  const dow = date.getDay();
+  return dow !== 0 && dow !== 6 && !isRussianHoliday(date);
+};
+
+// Skips weekends and Russian public holidays while counting; `days` may be
+// negative to walk backward (used when a deadline is fixed and the start
+// date has to be derived from it).
+const addWorkingDays = (date: Date, days: number): Date => {
+  let result = date;
+  const step = days >= 0 ? 1 : -1;
+  let remaining = Math.abs(days);
+  while (remaining > 0) {
+    result = addDays(result, step);
+    if (isWorkingDay(result)) remaining--;
+  }
+  return result;
+};
+
+// Inverse of addWorkingDays — how many working days fall in [start, end).
+// Used to recover a stage's "weeks" input from its stored calendar-day
+// duration, since that duration is no longer a flat weeks*7 and depends on
+// which holidays happened to fall inside that specific stretch.
+const countWorkingDays = (start: Date, end: Date): number => {
+  let count = 0;
+  let cur = start;
+  while (cur < end) {
+    if (isWorkingDay(cur)) count++;
+    cur = addDays(cur, 1);
+  }
+  return count;
+};
+
+const getEditorialPlanChain = (startDate: Date | null, weight: number | string): Record<string, Date | null> => {
+  const chain: Record<string, Date | null> = {};
+  if (!startDate) {
+    EDITORIAL_PLAN_CHAIN_ORDER.forEach(field => { chain[field] = null; });
+    chain['layoutStartDate'] = null;
+    return chain;
+  }
+  const weightKey = normalizeWeightKey(weight);
+  let cursor = startDate;
+  EDITORIAL_PLAN_CHAIN_ORDER.forEach(field => {
+    const days = EDITORIAL_PLAN_DAYS[field][weightKey];
+    cursor = days !== undefined ? addWorkingDays(cursor, days) : cursor;
+    chain[field] = cursor;
+  });
+  chain['layoutStartDate'] = chain['tzLayoutDate'] ? addWorkingDays(chain['tzLayoutDate'] as Date, 1) : null;
+  return chain;
+};
 
 const STAGE_TO_ROLE: Record<string, string> = {
   'Концептирование': ROLES.PRODUCER,
@@ -805,7 +954,9 @@ const ProjectModal: React.FC<{
     [...DEFAULT_STAGES, 'Производство и старт продаж'].forEach(stage => {
       if (initialData) {
         const res = initialData.resources.find(r => r.role === stage);
-        defaultObj[stage] = res?.tasks[0] ? Math.max(1, Math.round(res.tasks[0].duration / 7)) : (defaultReg[stage] || 2);
+        defaultObj[stage] = res?.tasks[0]
+          ? Math.max(1, Math.round(countWorkingDays(new Date(res.tasks[0].startDate), addDays(new Date(res.tasks[0].startDate), res.tasks[0].duration)) / 5))
+          : (defaultReg[stage] || 2);
       } else {
         defaultObj[stage] = defaultReg[stage] || 2;
       }
@@ -829,18 +980,17 @@ const ProjectModal: React.FC<{
     const prodDur = currentDurations['Производство и старт продаж'] || 2;
 
     const numericWeight = getNumericWeight(currentWeight);
-    const riskDuration = numericWeight <= 3 ? 28 : 56;
-    const prodDurationDays = prodDur * 7;
+    const riskWeeks = numericWeight <= 3 ? 4 : 8;
 
-    let daysBeforeSales = 0;
+    let weeksBeforeSales = 0;
     if (projectType === 'mhi') {
-      daysBeforeSales = (rDur + dvDur) * 7 + 14;
+      weeksBeforeSales = rDur + dvDur + 2;
     } else {
       const endOffset = cDur + dDur + Math.max(rDur, dvDur);
-      daysBeforeSales = endOffset * 7 + riskDuration + prodDurationDays;
+      weeksBeforeSales = endOffset + riskWeeks + prodDur;
     }
 
-    const calculatedStart = addDays(targetSalesStart, -daysBeforeSales);
+    const calculatedStart = addWorkingDays(targetSalesStart, -weeksBeforeSales * 5);
     return format(calculatedStart, 'yyyy-MM-dd');
   };
 
@@ -858,17 +1008,16 @@ const ProjectModal: React.FC<{
     const prodDur = currentDurations['Производство и старт продаж'] || 2;
 
     const numericWeight = getNumericWeight(currentWeight);
-    const riskDuration = numericWeight <= 3 ? 28 : 56;
-    const prodDurationDays = prodDur * 7;
+    const riskWeeks = numericWeight <= 3 ? 4 : 8;
 
-    let daysBeforeSales = 0;
+    let weeksBeforeSales = 0;
     if (projectType === 'mhi') {
-      daysBeforeSales = (rDur + dvDur) * 7 + 14;
+      weeksBeforeSales = rDur + dvDur + 2;
     } else {
       const endOffset = cDur + dDur + Math.max(rDur, dvDur);
-      daysBeforeSales = endOffset * 7 + riskDuration + prodDurationDays;
+      weeksBeforeSales = endOffset + riskWeeks + prodDur;
     }
-    return addDays(start, daysBeforeSales);
+    return addWorkingDays(start, weeksBeforeSales * 5);
   };
 
   // Helper to recalculate all dates for the project's stages, in sequence
@@ -886,23 +1035,23 @@ const ProjectModal: React.FC<{
       newStageDates['Девелопмент'] = format(start, 'yyyy-MM-dd');
       newStageDates['Арт Продакшн'] = format(start, 'yyyy-MM-dd');
       newStageDates['Редактирование'] = format(start, 'yyyy-MM-dd');
-      newStageDates['Дизайн и вёрстка'] = format(addDays(start, rDur * 7), 'yyyy-MM-dd');
-      newStageDates['Производство и старт продаж'] = format(addDays(start, (rDur + dvDur) * 7), 'yyyy-MM-dd');
+      newStageDates['Дизайн и вёрстка'] = format(addWorkingDays(start, rDur * 5), 'yyyy-MM-dd');
+      newStageDates['Производство и старт продаж'] = format(addWorkingDays(start, (rDur + dvDur) * 5), 'yyyy-MM-dd');
     } else {
       // Девелопмент and Арт Продакшн both start here. Девелопмент ends at
       // cDur+dDur, exactly when Редактирование starts (below); Арт Продакшн's
       // own (longer) regulatory duration — see getRegulatoryDurationsForWeight
       // — makes it end exactly when Дизайн и вёрстка starts instead.
       newStageDates['Концептирование'] = format(start, 'yyyy-MM-dd');
-      newStageDates['Девелопмент'] = format(addDays(start, cDur * 7), 'yyyy-MM-dd');
-      newStageDates['Арт Продакшн'] = format(addDays(start, cDur * 7), 'yyyy-MM-dd');
+      newStageDates['Девелопмент'] = format(addWorkingDays(start, cDur * 5), 'yyyy-MM-dd');
+      newStageDates['Арт Продакшн'] = format(addWorkingDays(start, cDur * 5), 'yyyy-MM-dd');
 
       const endOffset = cDur + dDur + Math.max(rDur, dvDur);
 
-      newStageDates['Редактирование'] = format(addDays(start, (endOffset - rDur) * 7), 'yyyy-MM-dd');
-      newStageDates['Дизайн и вёрстка'] = format(addDays(start, (endOffset - dvDur) * 7), 'yyyy-MM-dd');
+      newStageDates['Редактирование'] = format(addWorkingDays(start, (endOffset - rDur) * 5), 'yyyy-MM-dd');
+      newStageDates['Дизайн и вёрстка'] = format(addWorkingDays(start, (endOffset - dvDur) * 5), 'yyyy-MM-dd');
 
-      newStageDates['Производство и старт продаж'] = format(addDays(start, endOffset * 7), 'yyyy-MM-dd');
+      newStageDates['Производство и старт продаж'] = format(addWorkingDays(start, endOffset * 5), 'yyyy-MM-dd');
     }
     setStageStartDates(newStageDates);
   };
@@ -923,8 +1072,9 @@ const ProjectModal: React.FC<{
       [...DEFAULT_STAGES, 'Производство и старт продаж'].forEach(stage => {
         const res = initialData.resources.find(r => r.role === stage);
         if (res && res.tasks[0]) {
-          newDurations[stage] = Math.max(1, Math.round(res.tasks[0].duration / 7));
-          newStageDates[stage] = format(new Date(res.tasks[0].startDate), 'yyyy-MM-dd');
+          const taskStart = new Date(res.tasks[0].startDate);
+          newDurations[stage] = Math.max(1, Math.round(countWorkingDays(taskStart, addDays(taskStart, res.tasks[0].duration)) / 5));
+          newStageDates[stage] = format(taskStart, 'yyyy-MM-dd');
         } else {
           newDurations[stage] = 2;
         }
@@ -1017,7 +1167,7 @@ const ProjectModal: React.FC<{
     
     const stageStartStr = stageStartDates[stage] || projectStartDate;
     const stageStart = new Date(stageStartStr);
-    const stageEnd = addDays(stageStart, (durations[stage] || 2) * 7);
+    const stageEnd = addWorkingDays(stageStart, (durations[stage] || 2) * 5);
 
     return projects.some(p => {
       if (initialData && p.id === initialData.id) return false;
@@ -1111,22 +1261,26 @@ const ProjectModal: React.FC<{
         const prodStageStart = stageStartDates['Производство и старт продаж']
           ? new Date(stageStartDates['Производство и старт продаж'])
           : new Date(projectStartDate);
-        const riskDurationForSales = getNumericWeight(weight) <= 3 ? 28 : 56;
-        const prodDurationDaysForSales = (durations['Производство и старт продаж'] || 2) * 7;
+        const riskWeeksForSales = getNumericWeight(weight) <= 3 ? 4 : 8;
+        const prodWeeksForSales = durations['Производство и старт продаж'] || 2;
         // Same moment the «ПРОИЗВОДСТВО» task itself starts (right after risks) —
         // used below for «Заказ мелкотиражки».
-        const productionStartDate = addDays(prodStageStart, riskDurationForSales);
-        const salesStartDate = addDays(productionStartDate, prodDurationDaysForSales);
-        const salesEndDate = addDays(salesStartDate, 14);
+        const productionStartDate = addWorkingDays(prodStageStart, riskWeeksForSales * 5);
+        const salesStartDate = addWorkingDays(productionStartDate, prodWeeksForSales * 5);
+        const salesEndDate = addWorkingDays(salesStartDate, 2 * 5);
 
         // Regenerate resources and tasks
         finalResources = [...DEFAULT_STAGES, 'Производство и старт продаж'].map(stage => {
           const isSpecial = stage === 'Производство и старт продаж';
           const existingResource = initialData?.resources.find(r => r.role === stage);
           const weeks = durations[stage] || 2;
-          const durationDays = weeks * 7;
 
           const taskStartDate = stageStartDates[stage] ? new Date(stageStartDates[stage]) : new Date(projectStartDate);
+          // Regulatory durations are specified in working weeks — the actual
+          // calendar span skips weekends and Russian public holidays, so it's
+          // computed fresh from each task's own start (holidays fall on
+          // different calendar days depending on where a stage lands).
+          const durationDays = differenceInDays(addWorkingDays(taskStartDate, weeks * 5), taskStartDate);
 
           const tasks: Task[] = [];
           let currentSubTaskStart = taskStartDate;
@@ -1134,7 +1288,8 @@ const ProjectModal: React.FC<{
           if (isSpecial) {
             // 1. Add "Risks" task
             const riskTask = existingResource?.tasks.find(t => t.isRisk);
-            const riskDuration = getNumericWeight(weight) <= 3 ? 28 : 56;
+            const riskWeeks = getNumericWeight(weight) <= 3 ? 4 : 8;
+            const riskDuration = differenceInDays(addWorkingDays(currentSubTaskStart, riskWeeks * 5), currentSubTaskStart);
             tasks.push({
               id: riskTask?.id || Math.random().toString(36).substr(2, 9),
               label: 'РИСКИ',
@@ -1148,23 +1303,25 @@ const ProjectModal: React.FC<{
 
             // 2. Add "Production" task
             const prodTask = existingResource?.tasks.find(t => t.label === 'ПРОИЗВОДСТВО');
+            const prodDurationDays = differenceInDays(addWorkingDays(currentSubTaskStart, weeks * 5), currentSubTaskStart);
             tasks.push({
               id: prodTask?.id || Math.random().toString(36).substr(2, 9),
               label: 'ПРОИЗВОДСТВО',
               startDate: currentSubTaskStart,
-              duration: durationDays,
+              duration: prodDurationDays,
               color: 'gray',
               status: prodTask?.status || 'neutral'
             });
-            currentSubTaskStart = addDays(currentSubTaskStart, durationDays);
+            currentSubTaskStart = addDays(currentSubTaskStart, prodDurationDays);
 
-            // 3. Add "Start Sales" task (fixed 2 weeks)
+            // 3. Add "Start Sales" task (fixed 2 working weeks)
             const salesTask = existingResource?.tasks.find(t => t.label === 'СТАРТ ПРОДАЖ');
+            const salesDuration = differenceInDays(addWorkingDays(currentSubTaskStart, 2 * 5), currentSubTaskStart);
             tasks.push({
               id: salesTask?.id || Math.random().toString(36).substr(2, 9),
               label: 'СТАРТ ПРОДАЖ',
               startDate: currentSubTaskStart,
-              duration: 14,
+              duration: salesDuration,
               color: 'gray',
               status: salesTask?.status || 'neutral'
             });
@@ -1175,6 +1332,8 @@ const ProjectModal: React.FC<{
             // right as Девелопмент begins.
             const existingConceptTasks = existingResource?.tasks.filter(t => !t.isRisk && !t.isDelay) || [];
             const devStart = new Date(stageStartDates['Девелопмент'] || projectStartDate);
+            const secondConceptStart = addWorkingDays(devStart, 4 * 5);
+            const secondConceptDuration = differenceInDays(addWorkingDays(secondConceptStart, weeks * 5), secondConceptStart);
 
             tasks.push({
               id: existingConceptTasks[0]?.id || Math.random().toString(36).substr(2, 9),
@@ -1187,8 +1346,8 @@ const ProjectModal: React.FC<{
             tasks.push({
               id: existingConceptTasks[1]?.id || Math.random().toString(36).substr(2, 9),
               label: stage,
-              startDate: addWeeks(devStart, 4),
-              duration: durationDays,
+              startDate: secondConceptStart,
+              duration: secondConceptDuration,
               color: getTaskColor(stage),
               status: existingConceptTasks[1]?.status || 'neutral'
             });
@@ -1208,11 +1367,12 @@ const ProjectModal: React.FC<{
           // стартующие за 6 месяцев до окончания «Старт продаж».
           if (stage === 'Концептирование' && hasForeignComponents) {
             const existingOrderTask = existingResource?.tasks.find(t => t.label === 'Заказ компонентов');
+            const orderStart = addMonths(salesEndDate, -6);
             tasks.push({
               id: existingOrderTask?.id || Math.random().toString(36).substr(2, 9),
               label: 'Заказ компонентов',
-              startDate: addMonths(salesEndDate, -6),
-              duration: 14,
+              startDate: orderStart,
+              duration: differenceInDays(addWorkingDays(orderStart, 2 * 5), orderStart),
               color: getTaskColor(stage),
               status: existingOrderTask?.status || 'neutral'
             });
@@ -1226,7 +1386,7 @@ const ProjectModal: React.FC<{
               id: existingBatchTask?.id || Math.random().toString(36).substr(2, 9),
               label: 'Заказ мелкотиражки',
               startDate: productionStartDate,
-              duration: 14,
+              duration: differenceInDays(addWorkingDays(productionStartDate, 2 * 5), productionStartDate),
               color: getTaskColor(stage),
               status: existingBatchTask?.status || 'neutral'
             });
@@ -1261,7 +1421,7 @@ const ProjectModal: React.FC<{
                   id: existingMhiTask?.id || Math.random().toString(36).substr(2, 9),
                   label: 'Передача в МХИ',
                   startDate: mhiStartDate,
-                  duration: 14,
+                  duration: differenceInDays(addWorkingDays(mhiStartDate, 2 * 5), mhiStartDate),
                   color: 'purple',
                   status: existingMhiTask?.status || 'neutral'
                 }
@@ -1760,7 +1920,7 @@ const ProjectModal: React.FC<{
                 }).map((stage, sIdx, filteredArr) => {
                   const startDate = stageStartDates[stage] || projectStartDate;
                   const durationWeeks = durations[stage] || 2;
-                  const endDate = format(addWeeks(new Date(startDate), durationWeeks), 'yyyy-MM-dd');
+                  const endDate = format(addWorkingDays(new Date(startDate), durationWeeks * 5), 'yyyy-MM-dd');
                   const isLastStage = sIdx === filteredArr.length - 1;
 
                   return (
@@ -1822,7 +1982,7 @@ const ProjectModal: React.FC<{
                         <div className="space-y-1">
                           <label className="text-[9px] font-bold text-slate-400 uppercase">Финиш</label>
                           <div className="w-full px-2 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs text-slate-500 font-medium">
-                            {format(addWeeks(new Date(startDate), durationWeeks), 'dd.MM.yyyy')}
+                            {format(addWorkingDays(new Date(startDate), durationWeeks * 5), 'dd.MM.yyyy')}
                           </div>
                         </div>
                       </div>
@@ -1969,7 +2129,8 @@ const TaskBlock: React.FC<{
   isReadOnly?: boolean;
   projectWeight?: number | string;
   role?: string;
-}> = ({ task, onUpdate, onDelete, timelineStart, cellWidth = CELL_WIDTH, zoomLevel = 'week', lane = 0, isFocused = false, isReadOnly = false, projectWeight, role }) => {
+  dimmed?: boolean;
+}> = ({ task, onUpdate, onDelete, timelineStart, cellWidth = CELL_WIDTH, zoomLevel = 'week', lane = 0, isFocused = false, isReadOnly = false, projectWeight, role, dimmed = false }) => {
   const left = (differenceInDays(task.startDate, timelineStart) / 7) * cellWidth;
   const width = (task.duration / 7) * cellWidth;
   const top = lane * ROW_HEIGHT + 4;
@@ -2006,6 +2167,9 @@ const TaskBlock: React.FC<{
   const [tempComment, setTempComment] = useState(task.comment || '');
   const [tempLabel, setTempLabel] = useState(task.label);
   const commentBoxRef = useRef<HTMLDivElement>(null);
+  const commentButtonRef = useRef<HTMLButtonElement>(null);
+  const commentPopoverRef = useRef<HTMLDivElement>(null);
+  const [commentBoxPos, setCommentBoxPos] = useState<{ top: number; left: number } | null>(null);
 
   const commitComment = () => {
     if (tempComment !== (task.comment || '')) {
@@ -2017,17 +2181,54 @@ const TaskBlock: React.FC<{
   // Close (and save) the comment box on a click outside it, instead of
   // leaving it open indefinitely — without this, moving the mouse off the
   // task and back later would reveal the box still open, looking like it
-  // had popped open on hover.
+  // had popped open on hover. Checks both the button and the portaled
+  // popover, since the popover is no longer a DOM descendant of the button.
   useEffect(() => {
     if (!showCommentBox) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (commentBoxRef.current && !commentBoxRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const insideButton = commentBoxRef.current?.contains(target);
+      const insidePopover = commentPopoverRef.current?.contains(target);
+      if (!insideButton && !insidePopover) {
         commitComment();
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showCommentBox, tempComment]);
+
+  // The comment popover is rendered through a portal straight into <body> and
+  // positioned in fixed (viewport) coordinates computed from the button, so it
+  // always paints above every task bar and the sticky sidebar — a z-index set
+  // on the task itself can't escape stacking contexts it doesn't own (like the
+  // sticky team column), which is why it kept getting hidden underneath them.
+  useLayoutEffect(() => {
+    if (!showCommentBox) {
+      setCommentBoxPos(null);
+      return;
+    }
+    const updatePosition = () => {
+      const btn = commentButtonRef.current;
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      const popoverWidth = 224;
+      const popoverHeight = commentPopoverRef.current?.offsetHeight || 140;
+      let left = rect.right - popoverWidth;
+      left = Math.max(8, Math.min(left, window.innerWidth - popoverWidth - 8));
+      let top = rect.bottom + 4;
+      if (top + popoverHeight > window.innerHeight) {
+        top = rect.top - popoverHeight - 4;
+      }
+      setCommentBoxPos({ top, left });
+    };
+    updatePosition();
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [showCommentBox]);
 
   const startXRef = useRef(0);
   const latestClientXRef = useRef(0);
@@ -2193,11 +2394,12 @@ const TaskBlock: React.FC<{
         width: previewWidth,
         top,
         height,
+        opacity: dimmed ? 0.45 : 1,
         scale: isDragging ? 1.02 : (isFocused ? 1.25 : 1),
         boxShadow: isDragging
           ? "0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)"
           : "0 1px 2px 0 rgb(0 0 0 / 0.05)",
-        zIndex: isDragging ? 3000 : (showStatusMenu ? 2500 : (isFocused ? 2000 : 10))
+        zIndex: isDragging ? 3000 : (showStatusMenu || showCommentBox ? 2500 : (isFocused ? 2000 : 10))
       }}
       transition={isInteracting ? { duration: 0 } : {
         type: "spring",
@@ -2205,7 +2407,7 @@ const TaskBlock: React.FC<{
         damping: 30,
         mass: 0.8
       }}
-      className={`absolute flex items-center px-2 text-[10px] uppercase font-bold ${task.color === 'lightpink' ? 'text-pink-950' : 'text-white'} rounded cursor-move select-none border group/task ${
+      className={`absolute flex ${dimmed ? 'items-start pt-1' : 'items-center'} px-2 text-[10px] uppercase font-bold ${task.color === 'lightpink' ? 'text-pink-950' : 'text-white'} rounded cursor-move select-none border group/task ${
         editorColorClass ? editorColorClass : (
           (task.segment && !['darkred', 'lightpink'].includes(task.color)) ? (
             task.segment.toLowerCase() === 'детская' ? 'bg-pink-500 border-pink-600' :
@@ -2270,6 +2472,7 @@ const TaskBlock: React.FC<{
           <div className="flex items-center gap-1 opacity-0 group-hover/task:opacity-100 transition-opacity ml-1 relative">
             <div className="flex items-center relative" ref={commentBoxRef}>
               <button
+                ref={commentButtonRef}
                 onClick={(e) => {
                   if (isReadOnly) return;
                   e.stopPropagation();
@@ -2283,9 +2486,11 @@ const TaskBlock: React.FC<{
                 <MessageSquare size={10} fill={task.comment ? 'currentColor' : 'none'} />
               </button>
 
-              {showCommentBox && (
+              {showCommentBox && commentBoxPos && createPortal(
                 <div
-                  className={`absolute right-0 ${isUpwardDropdown ? 'bottom-full mb-1' : 'top-full mt-1'} flex flex-col gap-1.5 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl p-2 z-[100] w-56 normal-case font-normal`}
+                  ref={commentPopoverRef}
+                  style={{ position: 'fixed', top: commentBoxPos.top, left: commentBoxPos.left, zIndex: 9999 }}
+                  className="flex flex-col gap-1.5 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl p-2 w-56 normal-case font-normal"
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={(e) => e.stopPropagation()}
                 >
@@ -2305,7 +2510,8 @@ const TaskBlock: React.FC<{
                       Сохранить
                     </button>
                   </div>
-                </div>
+                </div>,
+                document.body
               )}
             </div>
 
@@ -2846,6 +3052,71 @@ export default function App() {
     });
   };
 
+  // Used by the "Редактура и вёрстка" table for its inline-editable columns
+  // (доп. компоненты / статус / текущая задача / комментарий) — these live on
+  // the project itself rather than on a task, so they persist the same way
+  // as any other project field.
+  const updateEditorialField = (projectId: string, updates: Partial<Project>) => {
+    if (isReadOnly) return;
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projectId) return p;
+      const updated = { ...p, ...updates };
+      syncProjectToServer(updated);
+      return updated;
+    }));
+  };
+
+  // The Редактор/Дизайнер names and the three stage dates on that same table
+  // aren't stored separately — they're read straight off the resource rows
+  // and tasks that already drive the Gantt, so the table always matches it.
+  const getStageResource = (project: Project, role: string) =>
+    project.resources.find(r => r.role === role);
+
+  const getStageStartDate = (project: Project, role: string): Date | null => {
+    const resource = getStageResource(project, role);
+    if (!resource) return null;
+    const mainTasks = resource.tasks.filter(t => !t.isDelay);
+    if (mainTasks.length === 0) return null;
+    return mainTasks.reduce((earliest: Date | null, t) =>
+      !earliest || t.startDate < earliest ? t.startDate : earliest, null);
+  };
+
+  const getStageEndDate = (project: Project, role: string): Date | null => {
+    const resource = getStageResource(project, role);
+    if (!resource) return null;
+    const mainTasks = resource.tasks.filter(t => !t.isDelay);
+    if (mainTasks.length === 0) return null;
+    return mainTasks.reduce((latest: Date | null, t) => {
+      const end = addDays(t.startDate, t.duration);
+      return !latest || end > latest ? end : latest;
+    }, null);
+  };
+
+  // "В печать" (all project types, including МХИ) reads the start of the
+  // "ПРОИЗВОДСТВО" sub-task inside the special "Производство и старт
+  // продаж" row — the print/production stage on the Gantt "план" — not its
+  // end, and not Дизайн-и-вёрстка's end (that was the previous behavior;
+  // changed by explicit request).
+  const getProductionTaskStartDate = (project: Project): Date | null => {
+    const resource = getStageResource(project, 'Производство и старт продаж');
+    if (!resource) return null;
+    const prodTask = resource.tasks.find(t => t.label?.trim().toUpperCase() === 'ПРОИЗВОДСТВО');
+    return prodTask ? prodTask.startDate : null;
+  };
+
+  // The "В печать" column's computed (non-override) date — factored out so
+  // the editorial table's row rendering and the edit_layout tab's sort-by
+  // order use the exact same rule: production's start only when it falls
+  // before Дизайн-и-вёрстка wraps up, else the design end (see
+  // getProductionTaskStartDate's comment above for the full rationale).
+  const getEditorialPrintDate = (project: Project): Date | null => {
+    const designEndDate = getStageEndDate(project, 'Дизайн и вёрстка');
+    const productionStartDate = getProductionTaskStartDate(project);
+    return productionStartDate && (!designEndDate || productionStartDate < designEndDate)
+      ? productionStartDate
+      : designEndDate;
+  };
+
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
 
@@ -2952,21 +3223,92 @@ export default function App() {
   };
 
   const [activeTab, setActiveTab] = useState<string>('projects');
-  const [showYearMenu, setShowYearMenu] = useState(false);
-  const yearMenuRef = useRef<HTMLDivElement>(null);
+  const [showProjectTabsMenu, setShowProjectTabsMenu] = useState(false);
+  const projectTabsMenuRef = useRef<HTMLDivElement>(null);
+  const [extraProjectYears, setExtraProjectYears] = useState<number[]>([]);
   const [userRoleFilter, setUserRoleFilter] = useState<string>('all');
 
+  // "Импорт" button dropdown: lists the last MAX_BACKUPS daily auto-backups
+  // (see server.ts) alongside the pre-existing manual file-import option.
+  const [showBackupsMenu, setShowBackupsMenu] = useState(false);
+  const backupsMenuRef = useRef<HTMLDivElement>(null);
+  const [backupsList, setBackupsList] = useState<{ id: string; createdAt: string }[]>([]);
+  const [isLoadingBackups, setIsLoadingBackups] = useState(false);
+
   useEffect(() => {
-    if (!showYearMenu) return;
+    if (!showBackupsMenu) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (yearMenuRef.current && !yearMenuRef.current.contains(e.target as Node)) {
-        setShowYearMenu(false);
+      if (backupsMenuRef.current && !backupsMenuRef.current.contains(e.target as Node)) {
+        setShowBackupsMenu(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [showYearMenu]);
-  
+  }, [showBackupsMenu]);
+
+  const fetchBackupsList = async () => {
+    setIsLoadingBackups(true);
+    try {
+      const res = await fetch('/api/backups');
+      const data = await res.json();
+      setBackupsList(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Fetch backups error:', err);
+      setBackupsList([]);
+    } finally {
+      setIsLoadingBackups(false);
+    }
+  };
+
+  const handleRestoreBackup = async (id: string, createdAt: string) => {
+    if (isReadOnly) return;
+    const dateLabel = format(new Date(createdAt), 'd MMMM yyyy, HH:mm', { locale: ru });
+    if (!window.confirm(`Восстановить версию от ${dateLabel}? Это действие заменит ВСЕ текущие данные версией на этот момент.`)) return;
+    setShowBackupsMenu(false);
+    try {
+      const res = await fetch(`/api/backups/${id}/restore`, { method: 'POST' });
+      const result = await res.json();
+      if (result.success) {
+        alert('Данные восстановлены из бэкапа!');
+        window.location.reload();
+      } else {
+        alert('Не удалось восстановить бэкап.');
+      }
+    } catch (err) {
+      console.error('Restore backup error:', err);
+      alert('Ошибка при восстановлении бэкапа.');
+    }
+  };
+
+  useEffect(() => {
+    if (!showProjectTabsMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (projectTabsMenuRef.current && !projectTabsMenuRef.current.contains(e.target as Node)) {
+        setShowProjectTabsMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showProjectTabsMenu]);
+
+  // "+" picker in the "Игра" column header of the Редактура и вёрстка table —
+  // that table only shows projects explicitly added to it, not every project.
+  const [showAddEditorialProjectMenu, setShowAddEditorialProjectMenu] = useState(false);
+  const [editorialAddSearch, setEditorialAddSearch] = useState('');
+  const addEditorialProjectMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showAddEditorialProjectMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (addEditorialProjectMenuRef.current && !addEditorialProjectMenuRef.current.contains(e.target as Node)) {
+        setShowAddEditorialProjectMenu(false);
+        setEditorialAddSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showAddEditorialProjectMenu]);
+
   // Review Tasks Mode State
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
   const [reviewTasks, setReviewTasks] = useState<{
@@ -2985,6 +3327,11 @@ export default function App() {
   const [reassigning, setReassigning] = useState<{ projectId: string; resourceId: string; role: string } | null>(null);
 
   const isProjectTab = activeTab.startsWith('projects_') || activeTab === 'projects' || activeTab === 'prototypes' || activeTab === 'releases' || activeTab === 'mhi' || activeTab === 'corps';
+  const isProjectFamilyTab = activeTab.startsWith('projects_') || activeTab === 'projects' || activeTab === 'mhi' || activeTab === 'corps';
+  // Placeholder stage tabs — views for these are built one at a time, so for
+  // now they just render an empty state instead of falling through to the
+  // team/users Gantt rendering that every other unrecognized tab lands on.
+  const isPlaceholderTab = activeTab === 'concept_art' || activeTab === 'devel';
 
   const getUserConflict = (userName: string, projectId: string, resourceId: string) => {
     if (!userName || userName === 'Не назначен') return false;
@@ -3144,6 +3491,7 @@ export default function App() {
   const zoomAnchorDateRef = useRef<Date | null>(null);
 
   const [projectSearch, setProjectSearch] = useState('');
+  const [teamSearch, setTeamSearch] = useState('');
   const [releaseYearFilter, setReleaseYearFilter] = useState<string>('all');
 
   const timelineStart = useMemo(() => {
@@ -3162,13 +3510,15 @@ export default function App() {
   }, [currentDate, activeTab, releaseYearFilter]);
 
   const sortedProjects = useMemo(() => {
-    return projects.filter(p => {
-      const matchesSearch = p.name.toLowerCase().includes(projectSearch.toLowerCase());
-      
+    const filtered = projects.filter(p => {
+      const matchesTeam = !teamSearch || p.resources.some(r => r.name.toLowerCase().includes(teamSearch.toLowerCase()));
+      const matchesSearch = p.name.toLowerCase().includes(projectSearch.toLowerCase()) && matchesTeam;
+
       if (activeTab === 'prototypes') return matchesSearch && p.isPrototype;
       if (activeTab === 'projects') return matchesSearch && !p.isPrototype;
       if (activeTab === 'mhi') return matchesSearch && !!p.isMhi;
       if (activeTab === 'corps') return matchesSearch && (p.segment || '').trim().toLowerCase() === 'корп. заказ';
+      if (activeTab === 'edit_layout') return matchesSearch && !!p.inEditorialLayout;
 
       if (activeTab.startsWith('projects_')) {
         const yearStr = activeTab.replace('projects_', '');
@@ -3186,7 +3536,21 @@ export default function App() {
       
       return matchesSearch;
     });
-  }, [projects, projectSearch, activeTab, releaseYearFilter]);
+
+    // "Редактура и вёрстка" ranks games by print date (earliest first)
+    // instead of the studio's manual project order — projects without a
+    // computable print date (no override, no Дизайн-и-вёрстка/ПРОИЗВОДСТВО
+    // data yet) sort to the end, since there's nothing to rank them by.
+    if (activeTab === 'edit_layout') {
+      return [...filtered].sort((a, b) => {
+        const dateA = (a.printReadyDate ? new Date(a.printReadyDate) : getEditorialPrintDate(a))?.getTime() ?? Infinity;
+        const dateB = (b.printReadyDate ? new Date(b.printReadyDate) : getEditorialPrintDate(b))?.getTime() ?? Infinity;
+        return dateA - dateB;
+      });
+    }
+
+    return filtered;
+  }, [projects, projectSearch, teamSearch, activeTab, releaseYearFilter]);
 
   const projectYears = useMemo(() => {
     const years = new Set<number>([2026, 2027, 2028]);
@@ -3196,8 +3560,14 @@ export default function App() {
         if (yr) years.add(yr);
       }
     });
+    extraProjectYears.forEach(yr => years.add(yr));
     return Array.from(years).sort();
-  }, [projects]);
+  }, [projects, extraProjectYears]);
+
+  const handleAddProjectYear = () => {
+    const maxYear = projectYears.length > 0 ? Math.max(...projectYears) : 2028;
+    setExtraProjectYears(prev => [...prev, maxYear + 1]);
+  };
 
   const availableYears = useMemo(() => {
     const years = new Set<string>();
@@ -3493,20 +3863,32 @@ export default function App() {
 
   const months = useMemo(() => {
     const monthMap: Record<string, { monthName: string; year: string; daysInTimeline: number }> = {};
-    weeks.forEach(weekStart => {
-      const key = format(weekStart, 'LLLL yyyy', { locale: ru });
+    const addToMonth = (date: Date, dayCount: number) => {
+      const key = format(date, 'LLLL yyyy', { locale: ru });
       if (!monthMap[key]) {
-        const monthName = format(weekStart, 'LLLL', { locale: ru });
+        const monthName = format(date, 'LLLL', { locale: ru });
         monthMap[key] = {
           monthName: monthName.charAt(0).toUpperCase() + monthName.slice(1),
-          year: format(weekStart, 'yyyy'),
+          year: format(date, 'yyyy'),
           daysInTimeline: 0
         };
       }
-      monthMap[key].daysInTimeline += 7;
-    });
+      monthMap[key].daysInTimeline += dayCount;
+    };
+    // Day zoom needs the month band's width to line up with the true
+    // per-day gridlines (`days`), not week boundaries — a week that
+    // straddles two months would otherwise get counted as 7 days in
+    // whichever month its Monday falls in, drifting the header out of
+    // sync with the day columns below it. Week/Month zoom render their
+    // grid at week granularity, so bucketing by week start is correct
+    // there (and keeps the band width a multiple of `cellWidth`).
+    if (zoomLevel === 'day') {
+      days.forEach(day => addToMonth(day, 1));
+    } else {
+      weeks.forEach(weekStart => addToMonth(weekStart, 7));
+    }
     return Object.values(monthMap);
-  }, [weeks]);
+  }, [weeks, days, zoomLevel]);
 
   const scrollToToday = (behaviorParam?: ScrollBehavior | any) => {
     const behavior: ScrollBehavior = (behaviorParam === 'smooth' || behaviorParam === 'auto') ? behaviorParam : 'smooth';
@@ -4061,7 +4443,7 @@ export default function App() {
       )}
 
       {/* Header */}
-      <header className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-200 z-30 shadow-sm">
+      <header className="flex items-center justify-between gap-4 px-6 py-4 bg-white border-b border-slate-200 z-30 shadow-sm">
         <div className="flex items-center gap-4">
           <div 
             onClick={rollDice}
@@ -4077,41 +4459,36 @@ export default function App() {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold tracking-tight">Студия разработки</h1>
+              <h1 className="text-xl font-bold tracking-tight leading-tight whitespace-nowrap">Студия<br />Hobby World</h1>
               {dbStatus && (
-                <div 
-                  className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-tighter shadow-sm border transition-all ${
-                    dbStatus.connected 
-                      ? 'bg-emerald-500 text-white border-emerald-600' 
-                      : 'bg-rose-500 text-white border-rose-600 animate-pulse'
+                <div
+                  className={`w-2.5 h-2.5 rounded-full shadow-sm border transition-all ${
+                    dbStatus.connected
+                      ? 'bg-emerald-500 border-emerald-600'
+                      : 'bg-rose-500 border-rose-600 animate-pulse'
                   }`}
                   title={dbStatus.message}
-                >
-                  {dbStatus.connected ? 'PG: Online' : 'PG: Offline'}
-                </div>
+                />
               )}
             </div>
-            <p className="text-xs text-slate-500 font-medium uppercase tracking-wider">Планирование проектов и ресурсов</p>
           </div>
         </div>
 
         <div className="flex items-center gap-4">
-          <button 
+          <button
             onClick={() => setIsSidebarVisible(!isSidebarVisible)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all h-[38px] ${isSidebarVisible ? 'bg-slate-100 text-slate-600' : 'bg-indigo-50 text-indigo-600 ring-2 ring-indigo-200'}`}
+            className={`flex items-center justify-center p-2 rounded-lg transition-all h-[38px] w-[38px] ${isSidebarVisible ? 'bg-slate-100 text-slate-600' : 'bg-indigo-50 text-indigo-600 ring-2 ring-indigo-200'}`}
             title="Детали"
           >
-            {isSidebarVisible ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
-            <span className="hidden md:inline whitespace-nowrap">Детали</span>
+            <Users size={18} />
           </button>
 
-          <button 
+          <button
             onClick={startReviewMode}
-            className="flex items-center gap-2 bg-slate-900 border border-slate-700 text-slate-200 px-4 py-2 rounded-lg text-sm font-medium transition-all hover:bg-slate-800 shadow-sm whitespace-nowrap h-[38px]"
+            className="flex items-center justify-center bg-slate-900 border border-slate-700 text-slate-200 p-2 rounded-lg transition-all hover:bg-slate-800 shadow-sm h-[38px] w-[38px]"
             title="Режим проверки"
           >
             <Search size={18} className="text-indigo-400" />
-            <span className="hidden lg:inline">Режим проверки</span>
           </button>
 
           <button
@@ -4161,8 +4538,8 @@ export default function App() {
 
 
 
-          {!isReadOnly && (
-            <button 
+          {!isReadOnly && (isProjectTab ? activeTab !== 'releases' : activeTab === 'users') && (
+            <button
               onClick={() => {
                 if (isProjectTab) setModalMode('add');
                 else setEditingUserId(null), setModalMode('add');
@@ -4203,16 +4580,57 @@ export default function App() {
             <span className="text-[10px] font-black uppercase tracking-tighter hidden sm:inline">Экспорт</span>
           </button>
 
-          <button 
-            onClick={() => fileInputRef.current?.click()}
-            className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all flex items-center gap-1.5 ring-1 ring-slate-200"
-            title="Импортировать данные из файла"
-          >
-            <Upload size={18} />
-            <span className="text-[10px] font-black uppercase tracking-tighter hidden sm:inline">Импорт</span>
-          </button>
+          <div className="relative" ref={backupsMenuRef}>
+            <button
+              onClick={() => {
+                const next = !showBackupsMenu;
+                setShowBackupsMenu(next);
+                if (next) fetchBackupsList();
+              }}
+              className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all flex items-center gap-1.5 ring-1 ring-slate-200"
+              title="Импорт данных: восстановить из бэкапа или загрузить файл"
+            >
+              <Upload size={18} />
+              <span className="text-[10px] font-black uppercase tracking-tighter hidden sm:inline">Импорт</span>
+            </button>
 
-          <input 
+            {showBackupsMenu && (
+              <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-slate-200 rounded-lg shadow-2xl z-[200] overflow-hidden">
+                <div className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-slate-400 border-b border-slate-100">
+                  Автобэкапы (каждый день в 9:00)
+                </div>
+                <div className="max-h-64 overflow-y-auto">
+                  {isLoadingBackups ? (
+                    <div className="px-3 py-3 text-xs text-slate-400">Загрузка...</div>
+                  ) : backupsList.length === 0 ? (
+                    <div className="px-3 py-3 text-xs text-slate-400">Бэкапов пока нет</div>
+                  ) : (
+                    backupsList.map(b => (
+                      <button
+                        key={b.id}
+                        onClick={() => handleRestoreBackup(b.id, b.createdAt)}
+                        disabled={isReadOnly}
+                        className="w-full text-left px-3 py-2 text-xs font-medium text-slate-600 hover:bg-indigo-50 hover:text-indigo-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {format(new Date(b.createdAt), 'd MMMM yyyy, HH:mm', { locale: ru })}
+                      </button>
+                    ))
+                  )}
+                </div>
+                <div className="border-t border-slate-100">
+                  <button
+                    onClick={() => { setShowBackupsMenu(false); fileInputRef.current?.click(); }}
+                    className="w-full text-left px-3 py-2.5 text-xs font-bold text-indigo-600 hover:bg-indigo-50 transition-colors flex items-center gap-2"
+                  >
+                    <Upload size={14} />
+                    Загрузить файл вручную
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <input
             type="file"
             ref={fileInputRef}
             onChange={handleImportData}
@@ -4223,10 +4641,216 @@ export default function App() {
       </header>
 
       {/* Main Content */}
-      <div 
+      <div
         ref={scrollContainerRef}
         className="flex-1 overflow-auto relative scroll-smooth"
       >
+        {isPlaceholderTab ? (
+          <div className="flex items-center justify-center h-full text-slate-400 text-sm font-bold uppercase tracking-widest">
+            Скоро здесь появится содержимое
+          </div>
+        ) : activeTab === 'edit_layout' ? (
+          <div className="p-6 overflow-auto h-full">
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr className="sticky top-0 bg-white z-10 border-b-2 border-slate-400 text-left">
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    <div className="flex items-center gap-2">
+                      <span>Игра</span>
+                      <div className="relative" ref={addEditorialProjectMenuRef}>
+                        <button
+                          onClick={() => setShowAddEditorialProjectMenu(!showAddEditorialProjectMenu)}
+                          className="w-4 h-4 flex items-center justify-center rounded bg-indigo-100 text-indigo-600 hover:bg-indigo-200 transition-colors"
+                          title="Добавить проект в таблицу"
+                        >
+                          <Plus size={10} strokeWidth={3} />
+                        </button>
+                        {showAddEditorialProjectMenu && (
+                          <div className="absolute top-full mt-1 left-0 flex flex-col bg-slate-800 border border-slate-700 rounded-lg shadow-2xl z-[100] w-56 normal-case font-normal">
+                            <div className="p-2 border-b border-slate-700">
+                              <input
+                                autoFocus
+                                type="text"
+                                value={editorialAddSearch}
+                                onChange={(e) => setEditorialAddSearch(e.target.value)}
+                                placeholder="Поиск игры..."
+                                className="w-full bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-[10px] text-white placeholder:text-slate-500 outline-none focus:border-indigo-500"
+                              />
+                            </div>
+                            <div className="max-h-64 overflow-y-auto p-1">
+                              {(() => {
+                                const addableProjects = projects
+                                  .filter(p => !p.inEditorialLayout && !p.isPrototype && !p.isCollapsed && p.name.toLowerCase().includes(editorialAddSearch.toLowerCase()))
+                                  .sort((a, b) => getProjectReleaseDate(a).getTime() - getProjectReleaseDate(b).getTime());
+                                if (addableProjects.length === 0) {
+                                  return <div className="px-2 py-3 text-[10px] text-slate-500 text-center">Ничего не найдено</div>;
+                                }
+                                return addableProjects.map(p => (
+                                  <button
+                                    key={p.id}
+                                    onClick={() => updateEditorialField(p.id, { inEditorialLayout: true })}
+                                    className="w-full text-[10px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-medium text-slate-200 truncate"
+                                  >
+                                    {p.name}
+                                  </button>
+                                ));
+                              })()}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Вес</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Сегмент</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Импорт</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Редактор</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Дизайнер</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Статус</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Текущая задача</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Комментарий</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">В печать</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Старт</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">ТЗ на вёрстку</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Правила</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Старт вёрстки</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Вёрстка компонентов</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Вёрстка коробки</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Вёрстка правил</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Согласование</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Пост-вёрстка</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedProjects.map(project => {
+                  const editor = getStageResource(project, 'Редактирование');
+                  const designer = getStageResource(project, 'Дизайн и вёрстка');
+                  const startDate = getStageStartDate(project, 'Редактирование');
+                  const printDate = getEditorialPrintDate(project);
+                  const statusInfo = EDITORIAL_STATUSES.find(s => s.value === project.editorialStatus);
+                  const fmt = (d: Date | null) => d ? format(d, 'dd.MM.yyyy') : '—';
+
+                  // Every date on this row is a faded "plan" estimate until a
+                  // person edits that specific cell for the first time — the
+                  // manual override field is what's saved, so its absence is
+                  // exactly what "still just a plan" means.
+                  const resolvedStartDate = project.editStartDate ? new Date(project.editStartDate) : startDate;
+                  // МХИ projects don't follow the regulatory weight-duration
+                  // schedule (most don't even carry a numeric weight), so no
+                  // recommended plan is computed for them here — only Старт
+                  // and В печать stay populated (from the Gantt "план" tasks
+                  // above), by explicit request.
+                  const planChain = project.isMhi ? {} : getEditorialPlanChain(resolvedStartDate, project.weight);
+                  const planClass = (isPlan: boolean) => isPlan ? 'opacity-40' : '';
+
+                  return (
+                    <tr key={project.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5 group">
+                          <span
+                            className="font-bold text-indigo-600 cursor-pointer"
+                            onClick={() => { setEditingProjectId(project.id); setModalMode('edit'); }}
+                          >
+                            {project.name}
+                          </span>
+                          <button
+                            onClick={() => updateEditorialField(project.id, { inEditorialLayout: false })}
+                            className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all flex-shrink-0"
+                            title="Убрать из таблицы"
+                          >
+                            <X size={11} strokeWidth={2.5} />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">{project.isMhi ? '—' : project.weight}</td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{project.segment || '—'}</td>
+                      <td className="px-3 py-2">
+                        <input
+                          key={`components-${project.id}`}
+                          type="text"
+                          defaultValue={project.componentsNote || ''}
+                          onBlur={(e) => updateEditorialField(project.id, { componentsNote: e.target.value })}
+                          disabled={isReadOnly}
+                          placeholder="—"
+                          className="w-28 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{editor?.name && editor.name !== 'Не назначен' ? editor.name : '—'}</td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{designer?.name && designer.name !== 'Не назначен' ? designer.name : '—'}</td>
+                      <td className="px-3 py-2">
+                        <select
+                          value={project.editorialStatus || ''}
+                          onChange={(e) => updateEditorialField(project.id, { editorialStatus: e.target.value || undefined })}
+                          disabled={isReadOnly}
+                          className={`text-[10px] font-bold uppercase tracking-tighter rounded-full px-2 py-1 outline-none border-none cursor-pointer ${statusInfo ? statusInfo.className : 'bg-slate-100 text-slate-400'}`}
+                        >
+                          <option value="">—</option>
+                          {EDITORIAL_STATUSES.map((s, i) => (
+                            <React.Fragment key={s.value}>
+                              {i === EDITORIAL_STATUS_UPPER_GROUP_SIZE && <option disabled>──────────</option>}
+                              <option value={s.value}>{s.value}</option>
+                            </React.Fragment>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          key={`task-${project.id}`}
+                          type="text"
+                          defaultValue={project.currentTaskNote || ''}
+                          onBlur={(e) => updateEditorialField(project.id, { currentTaskNote: e.target.value })}
+                          disabled={isReadOnly}
+                          placeholder="—"
+                          className="w-40 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          key={`comment-${project.id}`}
+                          type="text"
+                          defaultValue={project.editorialComment || ''}
+                          onBlur={(e) => updateEditorialField(project.id, { editorialComment: e.target.value })}
+                          disabled={isReadOnly}
+                          placeholder="—"
+                          className="w-40 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="date"
+                          value={project.printReadyDate || (printDate ? format(printDate, 'yyyy-MM-dd') : '')}
+                          onChange={(e) => updateEditorialField(project.id, { printReadyDate: e.target.value || undefined })}
+                          disabled={isReadOnly}
+                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.printReadyDate)}`}
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="date"
+                          value={project.editStartDate || (startDate ? format(startDate, 'yyyy-MM-dd') : '')}
+                          onChange={(e) => updateEditorialField(project.id, { editStartDate: e.target.value || undefined })}
+                          disabled={isReadOnly}
+                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.editStartDate)}`}
+                        />
+                      </td>
+                      {EDITORIAL_PLAN_DISPLAY_ORDER.map(field => (
+                        <td key={field} className="px-3 py-2">
+                          <input
+                            type="date"
+                            value={project[field] || (planChain[field] ? format(planChain[field] as Date, 'yyyy-MM-dd') : '')}
+                            onChange={(e) => updateEditorialField(project.id, { [field]: e.target.value || undefined })}
+                            disabled={isReadOnly}
+                            className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project[field])}`}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
         <div className="inline-flex min-w-full">
           {/* Static Columns */}
           {(isSidebarVisible || isProjectTab || activeTab === 'users') && (
@@ -4235,7 +4859,63 @@ export default function App() {
                 <div className="w-52 flex-shrink-0 border-r border-slate-100">
                   <div className="h-20 sticky top-0 z-50 flex flex-col justify-end px-3 pb-3 bg-white border-b-2 border-slate-400">
                     <div className="flex items-center justify-between mb-2">
-                      <div className="text-sm font-bold uppercase tracking-widest text-slate-400">{isProjectTab && activeTab === 'releases' ? 'Релизы' : 'Проект'}</div>
+                      {isProjectFamilyTab ? (
+                        <div className="relative" ref={projectTabsMenuRef}>
+                          <button
+                            onClick={() => setShowProjectTabsMenu(!showProjectTabsMenu)}
+                            className="flex items-center gap-1 text-sm font-bold uppercase tracking-widest text-slate-400 hover:text-indigo-600 transition-colors"
+                          >
+                            {activeTab === 'projects' ? 'Все проекты' :
+                             activeTab === 'mhi' ? 'МХИ' :
+                             activeTab === 'corps' ? 'Корпы' :
+                             `Проекты ${activeTab.replace('projects_', '')}`}
+                            <ChevronDown size={12} strokeWidth={3} />
+                          </button>
+
+                          {showProjectTabsMenu && (
+                            <div className="absolute top-full mt-1 left-0 flex flex-col bg-slate-800 border border-slate-700 rounded-lg shadow-2xl p-1 z-[100] min-w-[140px]">
+                              <button
+                                onClick={() => { setActiveTab('projects'); setShowProjectTabsMenu(false); }}
+                                className={`text-[9px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-bold uppercase tracking-tighter ${activeTab === 'projects' ? 'text-indigo-300 bg-white/5' : 'text-slate-300'}`}
+                              >
+                                Все проекты
+                              </button>
+                              <button
+                                onClick={() => { setActiveTab('mhi'); setShowProjectTabsMenu(false); }}
+                                className={`text-[9px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-bold uppercase tracking-tighter ${activeTab === 'mhi' ? 'text-indigo-300 bg-white/5' : 'text-slate-300'}`}
+                              >
+                                МХИ
+                              </button>
+                              <button
+                                onClick={() => { setActiveTab('corps'); setShowProjectTabsMenu(false); }}
+                                className={`text-[9px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-bold uppercase tracking-tighter ${activeTab === 'corps' ? 'text-indigo-300 bg-white/5' : 'text-slate-300'}`}
+                              >
+                                Корпы
+                              </button>
+                              <div className="h-px bg-slate-700 my-1" />
+                              {projectYears.map(yr => (
+                                <button
+                                  key={yr}
+                                  onClick={() => { setActiveTab(`projects_${yr}`); setShowProjectTabsMenu(false); }}
+                                  className={`text-[9px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-bold uppercase tracking-tighter ${activeTab === `projects_${yr}` ? 'text-indigo-300 bg-white/5' : 'text-slate-300'}`}
+                                >
+                                  Проекты {yr}
+                                </button>
+                              ))}
+                              <div className="h-px bg-slate-700 my-1" />
+                              <button
+                                onClick={handleAddProjectYear}
+                                className="text-[9px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-bold uppercase tracking-tighter text-emerald-400 flex items-center gap-1.5"
+                              >
+                                <Plus size={10} strokeWidth={3} />
+                                Добавить год
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-sm font-bold uppercase tracking-widest text-slate-400">{activeTab === 'releases' ? 'Релизы' : 'Проект'}</div>
+                      )}
                       {activeTab === 'releases' && (
                         <select 
                           value={releaseYearFilter}
@@ -4736,8 +5416,18 @@ export default function App() {
                       </div>
                     ) : isProjectTab ? (
                       <div className="w-64 flex-shrink-0">
-                        <div className="h-20 sticky top-0 z-50 flex items-end px-4 pb-3 text-sm font-bold uppercase tracking-widest text-slate-400 bg-white border-b-2 border-slate-400">
-                          Команда
+                        <div className="h-20 sticky top-0 z-50 flex flex-col justify-end px-4 pb-3 bg-white border-b-2 border-slate-400">
+                          <div className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-2">Команда</div>
+                          <div className="relative">
+                            <Users size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input
+                              type="text"
+                              placeholder="Поиск по команде..."
+                              value={teamSearch}
+                              onChange={(e) => setTeamSearch(e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-md py-1 pl-7 pr-2 text-[10px] font-bold outline-none focus:border-indigo-400 focus:bg-white transition-all text-slate-600 placeholder:text-slate-300"
+                            />
+                          </div>
                         </div>
                         {sortedProjects.map((project, pIdx) => {
                           const isCollapsed = collapsedProjects[project.id];
@@ -4947,7 +5637,7 @@ export default function App() {
                         be 1000px+ wide, so a plain centered label often lands
                         under the sidebar or scrolls out of view entirely. */}
                     <div
-                      className={`sticky w-fit h-10 flex flex-col items-center justify-center leading-tight font-bold uppercase tracking-widest text-slate-500 ${
+                      className={`sticky w-fit h-10 flex flex-col items-center justify-center leading-tight font-bold uppercase tracking-widest text-slate-500 pl-3 ${
                         zoomLevel === 'month' ? 'h-20 text-[13px]' : 'text-[11px]'
                       }`}
                       style={{ left: 464 }}
@@ -4975,9 +5665,6 @@ export default function App() {
                           isEndOfMonth ? 'border-r-slate-400' : 'border-slate-100'
                         } ${isCurrentWeek ? 'bg-indigo-50' : 'bg-white'}`}
                       >
-                        <span className={`text-[9px] font-medium uppercase ${isCurrentWeek ? 'text-indigo-600' : 'text-slate-400'}`}>
-                          Н{format(weekStart, 'w', { locale: ru })}
-                        </span>
                         <span className={`text-[10px] font-bold ${isCurrentWeek ? 'text-indigo-700' : 'text-slate-700'}`}>
                           {format(weekStart, 'd')}—{format(endOfWeekDate, 'd')}
                         </span>
@@ -5000,7 +5687,7 @@ export default function App() {
                         style={{ width: cellWidth / 7 }}
                         className={`flex-shrink-0 border-r overflow-hidden flex flex-col items-center justify-center transition-colors ${
                           isEndOfMonth ? 'border-r-slate-400' : 'border-slate-100'
-                        } ${isToday ? 'bg-indigo-50' : isWeekend ? 'bg-slate-50' : 'bg-white'}`}
+                        } ${isToday ? 'bg-indigo-50' : isWeekend ? 'bg-slate-200' : 'bg-white'}`}
                       >
                         <span className={`text-[9px] font-medium uppercase ${isToday ? 'text-indigo-600' : 'text-slate-400'}`}>
                           {format(day, 'EEE', { locale: ru })}
@@ -5031,7 +5718,7 @@ export default function App() {
                         style={{ width: cellWidth / 7 }}
                         className={`flex-shrink-0 border-r h-full ${
                           isEndOfMonth ? 'border-r-slate-400' : 'border-slate-100'
-                        } ${isToday ? 'bg-indigo-50/30' : isWeekend ? 'bg-slate-50/60' : ''}`}
+                        } ${isToday ? 'bg-indigo-50/30' : isWeekend ? 'bg-slate-200/50' : ''}`}
                       />
                     );
                   })
@@ -5138,7 +5825,7 @@ export default function App() {
                           }}
                         >
                           {resource.tasks.map(task => (
-                            <TaskBlock 
+                            <TaskBlock
                               key={task.id}
                               task={task}
                               timelineStart={timelineStart}
@@ -5150,8 +5837,36 @@ export default function App() {
                               onDelete={() => deleteTask(project.id, resource.id, task.id)}
                               projectWeight={project.weight}
                               role={resource.role}
+                              dimmed={resource.role === 'Редактирование' || resource.role === 'Дизайн и вёрстка'}
                             />
                           ))}
+                          {(() => {
+                            // "Факт" overlay: a synthetic, read-only bar (not a stored Task)
+                            // showing real progress against the "план" bars above, per the
+                            // editorial-table's Старт / Старт вёрстки / В печать fields — see
+                            // CLAUDE.md "Редактура и вёрстка" section for the field meanings.
+                            const factStartRaw = resource.role === 'Редактирование' ? project.editStartDate
+                              : resource.role === 'Дизайн и вёрстка' ? project.layoutStartDate
+                              : null;
+                            if (!factStartRaw) return null;
+                            const factStart = new Date(factStartRaw);
+                            const factEndRaw = project.printReadyDate ? new Date(project.printReadyDate) : new Date();
+                            const factEnd = factEndRaw < factStart ? factStart : factEndRaw;
+                            const factLeft = (differenceInDays(factStart, timelineStart) / 7) * cellWidth;
+                            const factWidth = Math.max((differenceInDays(factEnd, factStart) / 7) * cellWidth, 6);
+                            if (factLeft + factWidth < 0 || factLeft > weeks.length * cellWidth) return null;
+                            const factColor = resource.role === 'Редактирование' ? 'bg-sky-600 border-sky-700' : 'bg-emerald-600 border-emerald-700';
+                            const factLabel = getEditorialFactLabel(project, resource.role as 'Редактирование' | 'Дизайн и вёрстка');
+                            return (
+                              <div
+                                className={`absolute rounded border ${factColor} pointer-events-none z-10 flex items-center px-1.5 text-[9px] font-black text-white uppercase tracking-tighter truncate`}
+                                style={{ left: factLeft, width: factWidth, top: 26, height: 18 }}
+                                title={`Факт: ${factLabel} (${format(factStart, 'dd.MM.yyyy')} — ${format(factEnd, 'dd.MM.yyyy')})`}
+                              >
+                                {factLabel}
+                              </div>
+                            );
+                          })()}
                         </div>
                       ))
                     )}
@@ -5242,61 +5957,24 @@ export default function App() {
             </div>
           </div>
         </div>
+        )}
       </div>
 
       {/* Footer Info */}
       <footer className="px-6 py-2 bg-white border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 font-medium">
         <div className="flex items-center gap-4">
           <div className="bg-slate-100 p-0.5 rounded-lg flex shadow-inner">
-            <button 
+            <button
               onClick={() => setActiveTab('projects')}
-              className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'projects' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+              className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${isProjectFamilyTab ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
             >
-              Все проекты
+              Проекты
             </button>
-            <div className="relative" ref={yearMenuRef}>
-              <button
-                onClick={() => setShowYearMenu(!showYearMenu)}
-                className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all flex items-center gap-1 ${activeTab.startsWith('projects_') ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
-              >
-                {activeTab.startsWith('projects_') ? `Проекты ${activeTab.replace('projects_', '')}` : 'Проекты по годам'}
-                <ChevronDown size={10} strokeWidth={3} />
-              </button>
-
-              {showYearMenu && (
-                <div className="absolute bottom-full mb-1 left-0 flex flex-col bg-slate-800 border border-slate-700 rounded-lg shadow-2xl p-1 z-[100] min-w-[110px]">
-                  {projectYears.map(yr => (
-                    <button
-                      key={yr}
-                      onClick={() => {
-                        setActiveTab(`projects_${yr}`);
-                        setShowYearMenu(false);
-                      }}
-                      className={`text-[9px] px-2 py-1.5 hover:bg-white/10 rounded-md text-left transition-colors font-bold uppercase tracking-tighter ${activeTab === `projects_${yr}` ? 'text-indigo-300 bg-white/5' : 'text-slate-300'}`}
-                    >
-                      Проекты {yr}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
             <button
               onClick={() => setActiveTab('prototypes')}
               className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'prototypes' ? 'bg-white shadow-sm text-amber-600' : 'text-slate-400 hover:text-slate-600'}`}
             >
               Прототипы
-            </button>
-            <button
-              onClick={() => setActiveTab('mhi')}
-              className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'mhi' ? 'bg-white shadow-sm text-fuchsia-600' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              МХИ
-            </button>
-            <button
-              onClick={() => setActiveTab('corps')}
-              className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'corps' ? 'bg-white shadow-sm text-cyan-600' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              Корпы
             </button>
             <button
               onClick={() => setActiveTab('releases')}
@@ -5312,8 +5990,26 @@ export default function App() {
             </button>
           </div>
           <div className="flex items-center gap-2 pr-2 border-l border-slate-200 pl-4">
-            <Type size={14} className="text-slate-400" />
-            <span>Нажми два раза для добавления задачи.</span>
+            <div className="bg-slate-100 p-0.5 rounded-lg flex shadow-inner">
+              <button
+                onClick={() => setActiveTab('concept_art')}
+                className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'concept_art' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+              >
+                Концептирование и арт-продакшн
+              </button>
+              <button
+                onClick={() => setActiveTab('devel')}
+                className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'devel' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+              >
+                Девелопмент
+              </button>
+              <button
+                onClick={() => setActiveTab('edit_layout')}
+                className={`px-3 py-1.5 rounded-md text-[10px] font-black uppercase tracking-tighter transition-all ${activeTab === 'edit_layout' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
+              >
+                Редактура и вёрстка
+              </button>
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-4">
