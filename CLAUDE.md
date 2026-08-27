@@ -109,9 +109,10 @@ rendered as its own branch in the main content area. Key points:
   they sort last). This overrides the studio's manual project order used on
   every other tab; don't merge it with `handleSortProjects` (the footer sort
   button), which is a different, mutating, explicitly-triggered sort.
-- 19 columns total, in this exact order: Игра, Вес, Сегмент, Импорт
-  (`componentsNote` field — labeled "Доп. компоненты" until renamed by
-  request), Редактор, Дизайнер, Статус, Текущая задача, Комментарий, В
+- 20 columns total, in this exact order: Игра, Вес, **Издатель**
+  (`publisher` field, free text, same input styling as Импорт), Сегмент,
+  Импорт (`componentsNote` field — labeled "Доп. компоненты" until renamed
+  by request), Редактор, Дизайнер, Статус, Текущая задача, Комментарий, В
   печать, Старт, ТЗ на вёрстку, Правила, **Старт вёрстки**, Вёрстка
   компонентов, Вёрстка коробки, Вёрстка правил, Согласование, Пост-вёрстка.
 - **Editor/Дизайнер names and 2 of the dates are read live off the Gantt
@@ -295,13 +296,46 @@ rendered as its own branch in the main content area. Key points:
   file-watcher full-reload anyway in dev (see the gotcha above), and prod has
   no such watcher to rely on instead.
 - **"Импорт" button** (`App.tsx`, header) is no longer a direct file-picker
-  trigger — it's now a dropdown (`showBackupsMenu`/`backupsMenuRef`, same
-  click-outside pattern as `showProjectTabsMenu`) listing the last 7
+  trigger — it's now a dropdown (`showBackupsMenu`) listing the last 7
   auto-backups by date (fetched from `/api/backups` on open), each gated
-  behind a `window.confirm` before calling the restore endpoint. The
+  behind a `window.confirm` before calling the restore endpoint. Like the
+  task comment popover, it's rendered through a `createPortal` into `<body>`
+  at `position: fixed` coordinates computed from the button
+  (`backupsMenuButtonRef`/`backupsMenuPos`, updated on scroll/resize) rather
+  than a plain `absolute` child — the header itself sits earlier in the DOM
+  than the Gantt timeline's sticky month-band header, which creates its own
+  stacking context, so a merely-high `z-index` on a non-portaled dropdown
+  still rendered underneath those month bands. Click-outside checks both the
+  button and the portaled panel refs, same as the comment popover. The
   original manual-file-upload flow (`fileInputRef` + `handleImportData`) is
   still there too, moved into a "Загрузить файл вручную" row at the bottom
   of that same dropdown rather than removed.
+- **Background poll vs. local edits race (fixed).** A 5s `setInterval` in
+  `App.tsx` (right after the "Редактура и вёрстка" section's helpers) polls
+  `GET /api/projects` + `/api/users` so this tab picks up changes made by
+  *other* clients against the shared Postgres backend. Before this fix, it
+  had no way to know a *local* edit's save (`syncProjectToServer` /
+  `syncUserToServer`, both POST) was still in flight — if the poll's GET
+  landed while that POST's write was still being processed, it would read
+  pre-edit data and, since it diffs against and then overwrites local state
+  (`JSON.stringify` comparison → `setProjects`/`setUsers`), silently revert
+  the edit. The revert wasn't permanent — the POST always finished writing
+  correctly — but it was visible immediately, which read as "the change
+  appeared then disappeared," and looked fixed only after a **manual**
+  reload (an unrelated *automatic* full-page reload also happens on every
+  write, see the Vite-watches-`data/*.json` note above, but it could fire
+  either before or after the poll's clobber, so it didn't reliably mask the
+  issue). Fixed with `pendingWritesRef`/`lastWriteSettledAtRef`: every
+  mutating request now goes through `trackedFetch` (directly, or via
+  `syncProjectToServer`/the new `syncUserToServer` — added to de-duplicate
+  what used to be five separate copies of the same raw `fetch('/api/users',
+  {method:'POST'...})` block), which increments/decrements a pending-write
+  counter and stamps the settle time; the poll's two guard checks (before
+  firing its GETs, and again before applying the result) both skip while a
+  write is in flight *or* within 2s of one settling. If you add a new
+  mutation path, route it through `trackedFetch`/`syncProjectToServer`/
+  `syncUserToServer` rather than a bare `fetch(...)` — a bare call bypasses
+  this protection and reintroduces the race.
 
 ## Testing notes
 

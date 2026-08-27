@@ -2342,7 +2342,8 @@
     "printReadyDate": "2026-09-10",
     "layoutStartDate": "2026-08-26",
     "editorialStatus": "Препресс",
-    "tzLayoutDate": "2026-07-30"
+    "tzLayoutDate": "2026-07-30",
+    "publisher": ""
   },
   {
     "id": "3t28yf665",
@@ -16358,6 +16359,7 @@
     "hasForeignComponents": false,
     "hasSmallBatch": false,
     "sortOrder": 135,
-    "inEditorialLayout": true
+    "inEditorialLayout": true,
+    "publisher": ""
   }
 ]

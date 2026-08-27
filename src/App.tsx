@@ -222,6 +222,7 @@ interface Project {
   hasForeignComponents?: boolean;
   hasSmallBatch?: boolean;
   componentsNote?: string;
+  publisher?: string;
   editorialStatus?: string;
   currentTaskNote?: string;
   editorialComment?: string;
@@ -2762,16 +2763,7 @@ export default function App() {
     for (const user of lastState.users) {
       const current = users.find(u => u.id === user.id);
       if (JSON.stringify(current) !== JSON.stringify(user)) {
-        // We need a syncUser function or just use the logic from saveUser
-        try {
-          await fetch('/api/users', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(user)
-          });
-        } catch (err) {
-          console.error("Failed to restore user during undo:", err);
-        }
+        await syncUserToServer(user);
       }
     }
 
@@ -2782,7 +2774,7 @@ export default function App() {
     for (const id of currentProjectIds) {
       if (!restoredProjectIds.includes(id)) {
         try {
-          await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+          await trackedFetch(`/api/projects/${id}`, { method: 'DELETE' });
         } catch (err) {
           console.error("Failed to remove added project during undo:", err);
         }
@@ -2795,7 +2787,7 @@ export default function App() {
     for (const id of currentUserIds) {
       if (!restoredUserIds.includes(id)) {
         try {
-          await fetch(`/api/users/${id}`, { method: 'DELETE' });
+          await trackedFetch(`/api/users/${id}`, { method: 'DELETE' });
         } catch (err) {
           console.error("Failed to remove added user during undo:", err);
         }
@@ -2875,11 +2867,7 @@ export default function App() {
               await syncProjectToServer(p);
             }
             for (const u of data.users) {
-               await fetch('/api/users', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(u)
-              }).catch(err => console.error("Sync user error:", err));
+              await syncUserToServer(u);
             }
 
             alert('Данные успешно импортированы!');
@@ -2972,11 +2960,7 @@ export default function App() {
             updatedUsers.forEach((user: User) => {
               const original = data.find((u: User) => u.id === user.id);
               if (original && JSON.stringify(original.vacations) !== JSON.stringify(user.vacations)) {
-                fetch('/api/users', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(user)
-                }).catch(err => console.error("Failed to sync auto-holiday for user", user.name, err));
+                syncUserToServer(user);
               }
             });
           }
@@ -3039,11 +3023,7 @@ export default function App() {
       const updated = prevUsers.map(u => {
         if (u.id === userId) {
           const updatedUser = { ...u, isCollapsed };
-          fetch('/api/users', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updatedUser)
-          }).catch(err => console.error('Database save user error:', err));
+          syncUserToServer(updatedUser);
           return updatedUser;
         }
         return u;
@@ -3405,19 +3385,26 @@ export default function App() {
     const interval = setInterval(async () => {
       // Check if user is actively interacting to prevent overriding active states
       if (
-        (window as any).__isInteracting || 
-        modalMode !== null || 
-        editingProjectId !== null || 
-        editingUserId !== null || 
-        reassigning !== null || 
+        (window as any).__isInteracting ||
+        modalMode !== null ||
+        editingProjectId !== null ||
+        editingUserId !== null ||
+        reassigning !== null ||
         delayConfirmation !== null
       ) {
         return;
       }
-      
+
       // Also check if any text input/textarea is currently focused to avoid stealing focus during typing
       const activeEl = document.activeElement;
       if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.hasAttribute('contenteditable'))) {
+        return;
+      }
+
+      // Never poll while a local edit is still being written, or just after
+      // one settled — a GET that races a POST can read pre-write data, which
+      // would otherwise overwrite the just-made edit until a manual reload.
+      if (pendingWritesRef.current > 0 || Date.now() - lastWriteSettledAtRef.current < 2000) {
         return;
       }
 
@@ -3427,17 +3414,19 @@ export default function App() {
       try {
         const fetchProjects = fetch('/api/projects').then(res => res.json());
         const fetchUsers = fetch('/api/users').then(res => res.json());
-        
+
         const [projectsData, usersData] = await Promise.all([fetchProjects, fetchUsers]);
-        
+
         // Ensure no other updates happened while we fetched, and user is still not interacting
         if (
-          (window as any).__isInteracting || 
-          modalMode !== null || 
-          editingProjectId !== null || 
-          editingUserId !== null || 
-          reassigning !== null || 
-          delayConfirmation !== null
+          (window as any).__isInteracting ||
+          modalMode !== null ||
+          editingProjectId !== null ||
+          editingUserId !== null ||
+          reassigning !== null ||
+          delayConfirmation !== null ||
+          pendingWritesRef.current > 0 ||
+          Date.now() - lastWriteSettledAtRef.current < 2000
         ) {
           isPolling = false;
           return;
@@ -3739,19 +3728,56 @@ export default function App() {
     return users.filter(u => u.roles.includes(requiredRole));
   };
 
+  // Tracks in-flight and just-settled writes to /api/projects and
+  // /api/users. The background poll below only ever reads server state to
+  // pick up changes from OTHER clients — it must never win a race against a
+  // save this tab just made, or an edit visibly "appears then disappears"
+  // until the next manual reload (the GET can land while the POST's write
+  // is still being processed, reading pre-edit data). All mutating requests
+  // go through this so the poll can check pendingWritesRef/lastWriteSettledAtRef
+  // before applying anything it fetches.
+  const pendingWritesRef = useRef(0);
+  const lastWriteSettledAtRef = useRef(0);
+
+  const trackedFetch = async (input: string, init?: RequestInit) => {
+    pendingWritesRef.current++;
+    try {
+      return await fetch(input, init);
+    } finally {
+      pendingWritesRef.current--;
+      lastWriteSettledAtRef.current = Date.now();
+    }
+  };
+
   const syncProjectToServer = async (projectData: Project) => {
     try {
-      const response = await fetch('/api/projects', {
+      const response = await trackedFetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(projectData)
       });
-      
+
       if (!response.ok) {
         throw new Error('Failed to save to database');
       }
     } catch (error) {
       console.error('Database save error:', error);
+    }
+  };
+
+  const syncUserToServer = async (userData: User) => {
+    try {
+      const response = await trackedFetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userData)
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save user');
+      }
+    } catch (error) {
+      console.error('Database save user error:', error);
     }
   };
 
@@ -3795,7 +3821,7 @@ export default function App() {
 
     // Server-side update
     try {
-      const response = await fetch(`/api/projects/${projectId}`, {
+      const response = await trackedFetch(`/api/projects/${projectId}`, {
         method: 'DELETE'
       });
       if (!response.ok) {
@@ -3837,16 +3863,7 @@ export default function App() {
     }
 
     // Server-side update
-    try {
-      const response = await fetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(finalUserData)
-      });
-      if (!response.ok) throw new Error('Failed to save user');
-    } catch (error) {
-      console.error('Database save user error:', error);
-    }
+    await syncUserToServer(finalUserData);
 
     setModalMode(null);
     setEditingUserId(null);
@@ -3862,7 +3879,7 @@ export default function App() {
 
     // Server-side update
     try {
-      const response = await fetch(`/api/users/${userId}`, {
+      const response = await trackedFetch(`/api/users/${userId}`, {
         method: 'DELETE'
       });
       if (!response.ok) throw new Error('Failed to delete user');
@@ -4742,6 +4759,7 @@ export default function App() {
                     </div>
                   </th>
                   <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Вес</th>
+                  <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Издатель</th>
                   <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Сегмент</th>
                   <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Импорт</th>
                   <th className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Редактор</th>
@@ -4803,6 +4821,17 @@ export default function App() {
                         </div>
                       </td>
                       <td className="px-3 py-2 text-slate-600">{project.isMhi ? '—' : project.weight}</td>
+                      <td className="px-3 py-2">
+                        <input
+                          key={`publisher-${project.id}`}
+                          type="text"
+                          defaultValue={project.publisher || ''}
+                          onBlur={(e) => updateEditorialField(project.id, { publisher: e.target.value })}
+                          disabled={isReadOnly}
+                          placeholder="—"
+                          className="w-28 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
+                        />
+                      </td>
                       <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{project.segment || '—'}</td>
                       <td className="px-3 py-2">
                         <input
