@@ -224,6 +224,11 @@ interface Project {
   componentsNote?: string;
   publisher?: string;
   editorialStatus?: string;
+  // Date (yyyy-MM-dd) the editorial "Факт" bar's growing end was frozen at,
+  // set when editorialStatus enters PAUSE_STATUS_VALUE and cleared when it
+  // leaves — see PAUSE_STATUS_VALUE for why this only matters absent an
+  // explicit printReadyDate override.
+  editorialPausedAt?: string;
   currentTaskNote?: string;
   editorialComment?: string;
   tzLayoutDate?: string;
@@ -243,6 +248,7 @@ interface Project {
   // and the two workflows' notes/status shouldn't leak into each other.
   inDevelopmentLayout?: boolean;
   devStatus?: string;
+  devPausedAt?: string;
   devDocNote?: string;
   devComment?: string;
   devStartDate?: string;
@@ -255,6 +261,7 @@ interface Project {
   // the Девелопмент fields above.
   inArtLayout?: boolean;
   artStatus?: string;
+  artPausedAt?: string;
   artTaskNote?: string;
   artComment?: string;
   artStartDate?: string;
@@ -352,6 +359,23 @@ const ROLES = {
   LAYOUT_ARTIST: 'Верстальщик'
 } as const;
 
+// Shared "На паузе" status value, added last (behind its own extra divider,
+// separate from each tab's own below-line status group) to the status list
+// on all three of Редактура-и-вёрстка/Девелопмент/Концептирование-и-арт-
+// продакшн. Falling after each tab's UPPER_GROUP_SIZE boundary, it's already
+// included in that tab's own BELOW_LINE_STATUSES set, so no extra code is
+// needed for it to override the "Факт" bar's label — see
+// getEditorialFactLabel/getDevFactLabel/getArtFactLabel. What IS special
+// about it: while a project's status is PAUSE_STATUS_VALUE, the growing
+// "Факт" bar's end (which otherwise advances to `new Date()` every render
+// until the corresponding override date is filled in) freezes at the date
+// the pause began (project.editorialPausedAt/devPausedAt/artPausedAt) — see
+// the factEndRaw computation in the Проекты-tab Gantt render. Clearing the
+// pause (selecting any other status) drops back to `new Date()`, so growth
+// resumes from that day forward rather than jumping to make up the paused
+// days.
+const PAUSE_STATUS_VALUE = 'На паузе';
+
 const EDITORIAL_STATUSES: { value: string; className: string }[] = [
   { value: 'Арт', className: 'bg-green-100 text-green-700' },
   { value: 'Редактура', className: 'bg-rose-100 text-rose-700' },
@@ -364,6 +388,7 @@ const EDITORIAL_STATUSES: { value: string; className: string }[] = [
   { value: 'Ждём тираж', className: 'bg-amber-100 text-amber-700' },
   { value: 'Препресс', className: 'bg-indigo-100 text-indigo-700' },
   { value: 'Сдано', className: 'bg-teal-100 text-teal-700' },
+  { value: PAUSE_STATUS_VALUE, className: 'bg-slate-200 text-slate-600' },
 ];
 
 // In the "Редактура и вёрстка" status dropdown, everything through
@@ -410,6 +435,7 @@ const DEV_STATUSES: { value: string; className: string }[] = [
   { value: 'Согласование', className: 'bg-sky-100 text-sky-700' },
   { value: 'Затык', className: 'bg-red-100 text-red-700' },
   { value: 'Сдано', className: 'bg-teal-100 text-teal-700' },
+  { value: PAUSE_STATUS_VALUE, className: 'bg-slate-200 text-slate-600' },
 ];
 
 // Same divider convention as EDITORIAL_STATUS_UPPER_GROUP_SIZE: statuses
@@ -449,6 +475,7 @@ const ART_STATUSES: { value: string; className: string }[] = [
   { value: 'Согласование', className: 'bg-sky-100 text-sky-700' },
   { value: 'Затык', className: 'bg-red-100 text-red-700' },
   { value: 'Сдано', className: 'bg-teal-100 text-teal-700' },
+  { value: PAUSE_STATUS_VALUE, className: 'bg-slate-200 text-slate-600' },
 ];
 
 const ART_STATUS_UPPER_GROUP_SIZE = 3;
@@ -2754,6 +2781,92 @@ const TaskBlock: React.FC<{
   );
 };
 
+// Date cell used throughout the Редактура-и-вёрстка/Девелопмент/Концептирование-
+// и-арт-продакшн tables for any column that falls back to a faded "plan"
+// estimate until a person confirms it. A plain `<input type="date">` whose
+// `value` falls back to the plan's ISO string (the previous approach) shows
+// the right date, but if a person opens the picker and picks that exact same
+// day, the DOM value never actually changes — so no change event fires, the
+// override field never gets saved, and everything gated on it (status
+// changes, "Факт" bars/labels, growth) silently never kicks in. Fixed by
+// keeping the real input's value truly empty until an override exists (so
+// picking ANY date, plan-day included, is always a real "" → date change and
+// reliably fires), and rendering the faded plan date as a separate
+// pointer-events-none overlay in its place; `text-transparent` hides the
+// native input's own date text/placeholder digits without touching its
+// calendar-icon affordance.
+const PlanDateInput: React.FC<{
+  value?: string;
+  planDate: Date | null;
+  onChange: (value: string | undefined) => void;
+  disabled?: boolean;
+}> = ({ value, planDate, onChange, disabled }) => {
+  const hasOverride = !!value;
+  // Some cells have no plan to fall back to at all (e.g. the plan chain is
+  // skipped entirely for МХИ projects) — those stay a plain dimmed-blank
+  // input rather than hiding the native placeholder digits behind a
+  // (non-existent) overlay.
+  const showPlanOverlay = !hasOverride && !!planDate;
+  return (
+    <div className="relative">
+      {showPlanOverlay && (
+        <span className="pointer-events-none absolute inset-0 flex items-center px-1.5 py-1 text-slate-600 opacity-40 whitespace-nowrap">
+          {format(planDate as Date, 'dd.MM.yyyy')}
+        </span>
+      )}
+      <input
+        type="date"
+        value={value || ''}
+        onChange={(e) => onChange(e.target.value || undefined)}
+        disabled={disabled}
+        className={`w-full bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${showPlanOverlay ? 'text-transparent' : !hasOverride ? 'opacity-40' : ''}`}
+      />
+    </div>
+  );
+};
+
+// The studio's tracker app icon: five white squares forming a "Т" on a
+// rounded-square blue badge — no raster asset was supplied, so it's built as
+// an inline SVG, letting the two states below just toggle a CSS filter
+// instead of needing separate asset files.
+const TrackerLogo: React.FC<{ className?: string }> = ({ className }) => (
+  <svg viewBox="0 0 96 96" className={className} xmlns="http://www.w3.org/2000/svg">
+    <rect width="96" height="96" rx="22" fill="#5D7DF5" />
+    <rect x="16" y="16" width="18" height="18" rx="3" fill="#FFFFFF" />
+    <rect x="38" y="16" width="18" height="18" rx="3" fill="#FFFFFF" />
+    <rect x="60" y="16" width="18" height="18" rx="3" fill="#FFFFFF" />
+    <rect x="38" y="38" width="18" height="18" rx="3" fill="#FFFFFF" />
+    <rect x="38" y="60" width="18" height="18" rx="3" fill="#FFFFFF" />
+  </svg>
+);
+
+// Small button pinned next to the sidebar project card's "Выход"/"Продлено"
+// info block, linking out to project.trackerUrl (the project's tracker-link
+// field). Full color and clickable when the link is set; otherwise a
+// grayscale, inert placeholder — never an <a>, so it truly isn't clickable
+// rather than just styled to look disabled.
+const TrackerLinkButton: React.FC<{ trackerUrl?: string }> = ({ trackerUrl }) => {
+  if (trackerUrl) {
+    return (
+      <a
+        href={trackerUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className="flex-shrink-0 hover:scale-105 active:scale-95 transition-transform"
+        title="Открыть в трекере"
+      >
+        <TrackerLogo className="w-6 h-6" />
+      </a>
+    );
+  }
+  return (
+    <div className="flex-shrink-0 grayscale opacity-40" title="Ссылка на трекер не указана">
+      <TrackerLogo className="w-6 h-6" />
+    </div>
+  );
+};
+
 export default function App() {
   const [projects, setProjects] = useState<Project[]>(() => {
     return INITIAL_DATA.map(p => ({
@@ -4974,7 +5087,6 @@ export default function App() {
                   // and В печать stay populated (from the Gantt "план" tasks
                   // above), by explicit request.
                   const planChain = project.isMhi ? {} : getEditorialPlanChain(resolvedStartDate, project.weight);
-                  const planClass = (isPlan: boolean) => isPlan ? 'opacity-40' : '';
 
                   return (
                     <tr key={project.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
@@ -5024,7 +5136,13 @@ export default function App() {
                       <td className="px-3 py-2">
                         <select
                           value={project.editorialStatus || ''}
-                          onChange={(e) => updateEditorialField(project.id, { editorialStatus: e.target.value || undefined })}
+                          onChange={(e) => {
+                            const value = e.target.value || undefined;
+                            updateEditorialField(project.id, {
+                              editorialStatus: value,
+                              editorialPausedAt: value === PAUSE_STATUS_VALUE ? format(new Date(), 'yyyy-MM-dd') : undefined,
+                            });
+                          }}
                           disabled={isReadOnly}
                           className={`text-[10px] font-bold uppercase tracking-tighter rounded-full px-2 py-1 outline-none border-none cursor-pointer ${statusInfo ? statusInfo.className : 'bg-slate-100 text-slate-400'}`}
                         >
@@ -5032,6 +5150,7 @@ export default function App() {
                           {EDITORIAL_STATUSES.map((s, i) => (
                             <React.Fragment key={s.value}>
                               {i === EDITORIAL_STATUS_UPPER_GROUP_SIZE && <option disabled>──────────</option>}
+                              {i === EDITORIAL_STATUSES.length - 1 && <option disabled>──────────</option>}
                               <option value={s.value}>{s.value}</option>
                             </React.Fragment>
                           ))}
@@ -5060,31 +5179,28 @@ export default function App() {
                         />
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          type="date"
-                          value={project.printReadyDate || (printDate ? format(printDate, 'yyyy-MM-dd') : '')}
-                          onChange={(e) => updateEditorialField(project.id, { printReadyDate: e.target.value || undefined })}
+                        <PlanDateInput
+                          value={project.printReadyDate}
+                          planDate={printDate}
+                          onChange={(v) => updateEditorialField(project.id, { printReadyDate: v })}
                           disabled={isReadOnly}
-                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.printReadyDate)}`}
                         />
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          type="date"
-                          value={project.editStartDate || (startDate ? format(startDate, 'yyyy-MM-dd') : '')}
-                          onChange={(e) => updateEditorialField(project.id, { editStartDate: e.target.value || undefined })}
+                        <PlanDateInput
+                          value={project.editStartDate}
+                          planDate={startDate}
+                          onChange={(v) => updateEditorialField(project.id, { editStartDate: v })}
                           disabled={isReadOnly}
-                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.editStartDate)}`}
                         />
                       </td>
                       {EDITORIAL_PLAN_DISPLAY_ORDER.map(field => (
                         <td key={field} className="px-3 py-2">
-                          <input
-                            type="date"
-                            value={project[field] || (planChain[field] ? format(planChain[field] as Date, 'yyyy-MM-dd') : '')}
-                            onChange={(e) => updateEditorialField(project.id, { [field]: e.target.value || undefined })}
+                          <PlanDateInput
+                            value={project[field]}
+                            planDate={planChain[field]}
+                            onChange={(v) => updateEditorialField(project.id, { [field]: v })}
                             disabled={isReadOnly}
-                            className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project[field])}`}
                           />
                         </td>
                       ))}
@@ -5167,7 +5283,6 @@ export default function App() {
                   const devStartComputed = getStageStartDate(project, 'Девелопмент');
                   const toEditorialComputed = getStageStartDate(project, 'Редактирование');
                   const devStatusInfo = DEV_STATUSES.find(s => s.value === project.devStatus);
-                  const planClass = (isPlan: boolean) => isPlan ? 'opacity-40' : '';
 
                   return (
                     <tr key={project.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
@@ -5205,7 +5320,13 @@ export default function App() {
                       <td className="px-3 py-2">
                         <select
                           value={project.devStatus || ''}
-                          onChange={(e) => updateEditorialField(project.id, { devStatus: e.target.value || undefined })}
+                          onChange={(e) => {
+                            const value = e.target.value || undefined;
+                            updateEditorialField(project.id, {
+                              devStatus: value,
+                              devPausedAt: value === PAUSE_STATUS_VALUE ? format(new Date(), 'yyyy-MM-dd') : undefined,
+                            });
+                          }}
                           disabled={isReadOnly}
                           className={`text-[10px] font-bold uppercase tracking-tighter rounded-full px-2 py-1 outline-none border-none cursor-pointer ${devStatusInfo ? devStatusInfo.className : 'bg-slate-100 text-slate-400'}`}
                         >
@@ -5213,6 +5334,7 @@ export default function App() {
                           {DEV_STATUSES.map((s, i) => (
                             <React.Fragment key={s.value}>
                               {i === DEV_STATUS_UPPER_GROUP_SIZE && <option disabled>──────────</option>}
+                              {i === DEV_STATUSES.length - 1 && <option disabled>──────────</option>}
                               <option value={s.value}>{s.value}</option>
                             </React.Fragment>
                           ))}
@@ -5241,21 +5363,19 @@ export default function App() {
                         />
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          type="date"
-                          value={project.devToEditorialDate || (toEditorialComputed ? format(toEditorialComputed, 'yyyy-MM-dd') : '')}
-                          onChange={(e) => updateEditorialField(project.id, { devToEditorialDate: e.target.value || undefined })}
+                        <PlanDateInput
+                          value={project.devToEditorialDate}
+                          planDate={toEditorialComputed}
+                          onChange={(v) => updateEditorialField(project.id, { devToEditorialDate: v })}
                           disabled={isReadOnly}
-                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.devToEditorialDate)}`}
                         />
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          type="date"
-                          value={project.devStartDate || (devStartComputed ? format(devStartComputed, 'yyyy-MM-dd') : '')}
-                          onChange={(e) => updateEditorialField(project.id, { devStartDate: e.target.value || undefined })}
+                        <PlanDateInput
+                          value={project.devStartDate}
+                          planDate={devStartComputed}
+                          onChange={(v) => updateEditorialField(project.id, { devStartDate: v })}
                           disabled={isReadOnly}
-                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.devStartDate)}`}
                         />
                       </td>
                       {DEV_STAGE_DISPLAY_ORDER.map(field => (
@@ -5350,7 +5470,6 @@ export default function App() {
                   const artStartComputed = getStageStartDate(project, 'Арт Продакшн');
                   const toLayoutComputed = getStageStartDate(project, 'Дизайн и вёрстка');
                   const artStatusInfo = ART_STATUSES.find(s => s.value === project.artStatus);
-                  const planClass = (isPlan: boolean) => isPlan ? 'opacity-40' : '';
 
                   return (
                     <tr key={project.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
@@ -5399,7 +5518,13 @@ export default function App() {
                       <td className="px-3 py-2">
                         <select
                           value={project.artStatus || ''}
-                          onChange={(e) => updateEditorialField(project.id, { artStatus: e.target.value || undefined })}
+                          onChange={(e) => {
+                            const value = e.target.value || undefined;
+                            updateEditorialField(project.id, {
+                              artStatus: value,
+                              artPausedAt: value === PAUSE_STATUS_VALUE ? format(new Date(), 'yyyy-MM-dd') : undefined,
+                            });
+                          }}
                           disabled={isReadOnly}
                           className={`text-[10px] font-bold uppercase tracking-tighter rounded-full px-2 py-1 outline-none border-none cursor-pointer ${artStatusInfo ? artStatusInfo.className : 'bg-slate-100 text-slate-400'}`}
                         >
@@ -5407,6 +5532,7 @@ export default function App() {
                           {ART_STATUSES.map((s, i) => (
                             <React.Fragment key={s.value}>
                               {i === ART_STATUS_UPPER_GROUP_SIZE && <option disabled>──────────</option>}
+                              {i === ART_STATUSES.length - 1 && <option disabled>──────────</option>}
                               <option value={s.value}>{s.value}</option>
                             </React.Fragment>
                           ))}
@@ -5435,21 +5561,19 @@ export default function App() {
                         />
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          type="date"
-                          value={project.artToLayoutDate || (toLayoutComputed ? format(toLayoutComputed, 'yyyy-MM-dd') : '')}
-                          onChange={(e) => updateEditorialField(project.id, { artToLayoutDate: e.target.value || undefined })}
+                        <PlanDateInput
+                          value={project.artToLayoutDate}
+                          planDate={toLayoutComputed}
+                          onChange={(v) => updateEditorialField(project.id, { artToLayoutDate: v })}
                           disabled={isReadOnly}
-                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.artToLayoutDate)}`}
                         />
                       </td>
                       <td className="px-3 py-2">
-                        <input
-                          type="date"
-                          value={project.artStartDate || (artStartComputed ? format(artStartComputed, 'yyyy-MM-dd') : '')}
-                          onChange={(e) => updateEditorialField(project.id, { artStartDate: e.target.value || undefined })}
+                        <PlanDateInput
+                          value={project.artStartDate}
+                          planDate={artStartComputed}
+                          onChange={(v) => updateEditorialField(project.id, { artStartDate: v })}
                           disabled={isReadOnly}
-                          className={`bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors text-slate-600 ${planClass(!project.artStartDate)}`}
                         />
                       </td>
                       {ART_STAGE_DISPLAY_ORDER.map(field => (
@@ -5730,36 +5854,40 @@ export default function App() {
                               )}
                             </div>
                             {!isReleasesTab && (
-                              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                                <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">Выход: <span className="font-bold text-indigo-600">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex flex-col gap-1 min-w-0">
+                                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                                    <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">Выход: <span className="font-bold text-indigo-600">
+                                      {(() => {
+                                        const latestTaskDate = getProjectReleaseDate(project);
+                                        const months = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+                                        return latestTaskDate.getTime() > 0 ? `${latestTaskDate.getDate()} ${months[latestTaskDate.getMonth()]} ${latestTaskDate.getFullYear()}` : '—';
+                                      })()}
+                                    </span></span>
+                                  </div>
                                   {(() => {
-                                    const latestTaskDate = getProjectReleaseDate(project);
-                                    const months = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
-                                    return latestTaskDate.getTime() > 0 ? `${latestTaskDate.getDate()} ${months[latestTaskDate.getMonth()]} ${latestTaskDate.getFullYear()}` : '—';
+                                    const overdueCount = project.resources.reduce((acc, r) =>
+                                      acc + r.tasks.filter(t => t.status === 'overdue').length, 0
+                                    );
+                                    const limit = getNumericWeight(project.weight) <= 3 ? 4 : 8;
+                                    return (
+                                      <div
+                                        className={`text-[9px] font-black uppercase tracking-tighter py-0.5 px-2 rounded-full w-fit border transition-all ${
+                                          overdueCount > limit
+                                            ? 'bg-red-600 text-white border-red-700 shadow-sm'
+                                            : 'bg-slate-50 text-slate-500 border-slate-100'
+                                        }`}
+                                      >
+                                        Продлено: {overdueCount} из {limit}
+                                      </div>
+                                    );
                                   })()}
-                                </span></span>
+                                </div>
+                                <TrackerLinkButton trackerUrl={project.trackerUrl} />
                               </div>
                             )}
                           </div>
                         </div>
-                        {(() => {
-                          if (isReleasesTab) return null;
-                          const overdueCount = project.resources.reduce((acc, r) => 
-                            acc + r.tasks.filter(t => t.status === 'overdue').length, 0
-                          );
-                          const limit = getNumericWeight(project.weight) <= 3 ? 4 : 8;
-                          return (
-                            <div 
-                              className={`text-[9px] font-black uppercase tracking-tighter py-0.5 px-2 rounded-full w-fit border transition-all ${
-                                overdueCount > limit 
-                                  ? 'bg-red-600 text-white border-red-700 shadow-sm' 
-                                  : 'bg-slate-50 text-slate-500 border-slate-100'
-                              }`}
-                            >
-                              Продлено: {overdueCount} из {limit}
-                            </div>
-                          );
-                        })()}
                         </>
                         )}
                       </div>
@@ -6481,10 +6609,16 @@ export default function App() {
                             if (!factStartRaw) return null;
                             const factStart = new Date(factStartRaw);
                             const factEndRaw = resource.role === 'Девелопмент'
-                              ? (project.devToEditorialDate ? new Date(project.devToEditorialDate) : new Date())
+                              ? (project.devToEditorialDate ? new Date(project.devToEditorialDate)
+                                : project.devStatus === PAUSE_STATUS_VALUE && project.devPausedAt ? new Date(project.devPausedAt)
+                                : new Date())
                               : resource.role === 'Арт Продакшн'
-                              ? (project.artToLayoutDate ? new Date(project.artToLayoutDate) : new Date())
-                              : (project.printReadyDate ? new Date(project.printReadyDate) : new Date());
+                              ? (project.artToLayoutDate ? new Date(project.artToLayoutDate)
+                                : project.artStatus === PAUSE_STATUS_VALUE && project.artPausedAt ? new Date(project.artPausedAt)
+                                : new Date())
+                              : (project.printReadyDate ? new Date(project.printReadyDate)
+                                : project.editorialStatus === PAUSE_STATUS_VALUE && project.editorialPausedAt ? new Date(project.editorialPausedAt)
+                                : new Date());
                             const factEnd = factEndRaw < factStart ? factStart : factEndRaw;
                             const factLeft = (differenceInDays(factStart, timelineStart) / 7) * cellWidth;
                             const factWidth = Math.max((differenceInDays(factEnd, factStart) / 7) * cellWidth, 6);
