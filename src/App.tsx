@@ -200,6 +200,10 @@ interface Resource {
   id: string;
   role: string;
   name: string;
+  // Optional co-assignee — currently only offered for the "Девелопмент"
+  // stage (two developers pairing on the same task/timeline, by request),
+  // not a general multi-assignee mechanism for every role.
+  secondName?: string;
   tasks: Task[];
   isSpecialRow?: boolean;
 }
@@ -585,6 +589,12 @@ const getEditorialPlanChain = (startDate: Date | null, weight: number | string):
   chain['layoutStartDate'] = chain['tzLayoutDate'] ? addWorkingDays(chain['tzLayoutDate'] as Date, 1) : null;
   return chain;
 };
+
+// Human-readable name for a resource row — appends the co-assignee (see
+// Resource.secondName) when there is one, e.g. two developers pairing on
+// the same Девелопмент row: "Иван Иванов + Пётр Петров".
+const getResourceDisplayName = (resource: { name: string; secondName?: string }): string =>
+  resource.secondName ? `${resource.name} + ${resource.secondName}` : resource.name;
 
 const STAGE_TO_ROLE: Record<string, string> = {
   'Концептирование': ROLES.PRODUCER,
@@ -1076,6 +1086,12 @@ const ProjectModal: React.FC<{
     return DEFAULT_STAGES.reduce((acc, stage) => ({ ...acc, [stage]: '' }), {});
   });
 
+  // Optional second developer paired on the same Девелопмент stage — see
+  // Resource.secondName. Only this one stage supports a co-assignee.
+  const [devSecondAssignee, setDevSecondAssignee] = useState(
+    initialData?.resources.find(r => r.role === 'Девелопмент')?.secondName || ''
+  );
+
   const [durations, setDurations] = useState<Record<string, number>>(() => {
     const defaultObj: Record<string, number> = {};
     const defaultReg = getRegulatoryDurationsForWeight(initialData?.weight || 1);
@@ -1236,6 +1252,7 @@ const ProjectModal: React.FC<{
         if (!r.isSpecialRow) acc[r.role] = r.name;
         return acc;
       }, {} as Record<string, string>));
+      setDevSecondAssignee(initialData.resources.find(r => r.role === 'Девелопмент')?.secondName || '');
     } else {
       setName('');
       setWeight(1);
@@ -1253,6 +1270,7 @@ const ProjectModal: React.FC<{
       setStartYear(today.getFullYear());
       setPlanningMode('release');
       setAssignments(DEFAULT_STAGES.reduce((acc, stage) => ({ ...acc, [stage]: '' }), {}));
+      setDevSecondAssignee('');
 
       const newDurations = getRegulatoryDurationsForWeight(1);
       setDurations(newDurations);
@@ -1300,7 +1318,9 @@ const ProjectModal: React.FC<{
     return projects.some(p => {
       if (initialData && p.id === initialData.id) return false;
       return p.resources.some(r => {
-        if (r.name !== userName) return false;
+        // A person can be busy either as the primary assignee or as the
+        // second developer paired onto a Девелопмент row (see secondName).
+        if (r.name !== userName && r.secondName !== userName) return false;
         return r.tasks.some(t => {
           const tStart = new Date(t.startDate);
           const tEnd = addDays(tStart, t.duration);
@@ -1378,6 +1398,7 @@ const ProjectModal: React.FC<{
           return {
             ...r,
             name: r.isSpecialRow ? r.name : (assignments[r.role] || r.name),
+            secondName: r.role === 'Девелопмент' ? (devSecondAssignee || undefined) : r.secondName,
             tasks: updatedTasks
           };
         });
@@ -1524,6 +1545,7 @@ const ProjectModal: React.FC<{
             id: existingResource?.id || Math.random().toString(36).substr(2, 9),
             role: stage,
             name: isSpecial ? '' : (assignments[stage] || 'Не назначен'),
+            secondName: stage === 'Девелопмент' ? (devSecondAssignee || undefined) : undefined,
             tasks: tasks,
             isSpecialRow: isSpecial
           };
@@ -2141,6 +2163,32 @@ const ProjectModal: React.FC<{
                               Куратор (светло-розовый)
                             </button>
                           </div>
+                        </div>
+                      )}
+                      {stage === 'Девелопмент' && (
+                        <div className="mt-2.5 p-3 bg-purple-50/50 border border-purple-100 rounded-xl space-y-1">
+                          <label className="block text-[9px] font-bold text-purple-700 uppercase">Второй разработчик (опционально)</label>
+                          <select
+                            className={`w-full px-3 py-2 bg-white border rounded-lg text-xs outline-none focus:border-indigo-500 ${
+                              getUserConflictForStage(devSecondAssignee, stage) ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200'
+                            }`}
+                            value={devSecondAssignee}
+                            onChange={(e) => setDevSecondAssignee(e.target.value)}
+                          >
+                            <option value="">Не назначен</option>
+                            {getFilteredUsers(stage).filter(u => u.name !== assignments[stage]).map(u => {
+                              const isBusy = getUserConflictForStage(u.name, stage);
+                              return (
+                                <option
+                                  key={u.id}
+                                  value={u.name}
+                                  style={isBusy ? { color: '#e11d48', fontWeight: 'bold' } : {}}
+                                >
+                                  {u.name} {isBusy ? '⚠️' : ''}
+                                </option>
+                              );
+                            })}
+                          </select>
                         </div>
                       )}
                     </div>
@@ -3586,6 +3634,50 @@ export default function App() {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [reassigning, setReassigning] = useState<{ projectId: string; resourceId: string; role: string } | null>(null);
+  // Anchor rect captured (from the button, at click time) for the "Команда"
+  // reassign popover below — used to compute real, viewport-relative fixed
+  // positioning instead of the old `isNearBottom` guess, which flipped every
+  // popover upward (off the top of the screen) whenever the filtered project
+  // list was short, since it judged "near the bottom" by list index rather
+  // than actual on-screen position.
+  const [reassignAnchorRect, setReassignAnchorRect] = useState<DOMRect | null>(null);
+  const [reassignPopoverPos, setReassignPopoverPos] = useState<{ top: number; left: number } | null>(null);
+  const closeReassignPopover = () => {
+    setReassigning(null);
+    setReassignAnchorRect(null);
+  };
+
+  useLayoutEffect(() => {
+    if (!reassigning || !reassignAnchorRect) {
+      setReassignPopoverPos(null);
+      return;
+    }
+    const popoverWidth = 240;
+    // The scrollable user list caps at max-h-60 (240px); header + "Снять
+    // назначение" + "Отмена" + padding add roughly another 150px on top —
+    // an estimate (not a post-render measurement) is enough here since the
+    // popover's own max-height already bounds how wrong it can be, and this
+    // mirrors the same estimate-based approach the task comment popover uses.
+    const popoverHeight = 390;
+    const updatePosition = () => {
+      const rect = reassignAnchorRect;
+      let left = rect.right - popoverWidth;
+      left = Math.max(8, Math.min(left, window.innerWidth - popoverWidth - 8));
+      let top = rect.bottom + 8;
+      if (top + popoverHeight > window.innerHeight) {
+        top = rect.top - popoverHeight - 8;
+      }
+      top = Math.max(8, top);
+      setReassignPopoverPos({ top, left });
+    };
+    updatePosition();
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [reassigning, reassignAnchorRect]);
 
   const isProjectTab = activeTab.startsWith('projects_') || activeTab === 'projects' || activeTab === 'prototypes' || activeTab === 'releases' || activeTab === 'mhi' || activeTab === 'corps' || activeTab === 'no_mhi';
   const isProjectFamilyTab = activeTab.startsWith('projects_') || activeTab === 'projects' || activeTab === 'mhi' || activeTab === 'corps' || activeTab === 'no_mhi';
@@ -3610,7 +3702,9 @@ export default function App() {
 
     return projects.some(p => {
       return p.resources.some(r => {
-        if (r.name !== userName) return false;
+        // A person can be busy either as the primary assignee or as the
+        // second developer paired onto a Девелопмент row (see secondName).
+        if (r.name !== userName && r.secondName !== userName) return false;
         if (p.id === projectId && r.id === resourceId) return false;
 
         return r.tasks.some(t => {
@@ -3780,7 +3874,10 @@ export default function App() {
 
   const sortedProjects = useMemo(() => {
     const filtered = projects.filter(p => {
-      const matchesTeam = !teamSearch || p.resources.some(r => r.name.toLowerCase().includes(teamSearch.toLowerCase()));
+      const matchesTeam = !teamSearch || p.resources.some(r =>
+        r.name.toLowerCase().includes(teamSearch.toLowerCase()) ||
+        (r.secondName || '').toLowerCase().includes(teamSearch.toLowerCase())
+      );
       const matchesSearch = p.name.toLowerCase().includes(projectSearch.toLowerCase()) && matchesTeam;
 
       if (activeTab === 'prototypes') return matchesSearch && p.isPrototype;
@@ -3788,9 +3885,14 @@ export default function App() {
       if (activeTab === 'mhi') return matchesSearch && !!p.isMhi;
       if (activeTab === 'no_mhi') return matchesSearch && !p.isPrototype && !p.isMhi;
       if (activeTab === 'corps') return matchesSearch && (p.segment || '').trim().toLowerCase() === 'корп. заказ';
-      if (activeTab === 'edit_layout') return matchesSearch && !!p.inEditorialLayout;
-      if (activeTab === 'devel') return matchesSearch && !!p.inDevelopmentLayout;
-      if (activeTab === 'concept_art') return matchesSearch && !!p.inArtLayout;
+      // These three tabs have no search/team-search box of their own (that
+      // UI only renders for isProjectTab) — filtering them by whatever was
+      // last typed into the Проекты tab's (invisible, here) search box was
+      // an unintended leak, not a feature, so they ignore projectSearch/
+      // teamSearch entirely and just show every opted-in project.
+      if (activeTab === 'edit_layout') return !!p.inEditorialLayout;
+      if (activeTab === 'devel') return !!p.inDevelopmentLayout;
+      if (activeTab === 'concept_art') return !!p.inArtLayout;
 
       if (activeTab.startsWith('projects_')) {
         const yearStr = activeTab.replace('projects_', '');
@@ -3925,10 +4027,16 @@ export default function App() {
     const rawMap: Record<string, { project: string; role: string; task: Task; projectId: string; resourceId: string; projectWeight?: number | string }[]> = {};
     projects.forEach(p => {
       p.resources.forEach(r => {
-        if (!r.name || r.name === 'Не назначен') return;
-        if (!rawMap[r.name]) rawMap[r.name] = [];
-        r.tasks.forEach(t => {
-          rawMap[r.name].push({ project: p.name, role: r.role, task: t, projectId: p.id, resourceId: r.id, projectWeight: p.weight });
+        // Both the primary assignee and the second developer paired onto a
+        // Девелопмент row (see Resource.secondName) get this row's tasks
+        // under their own employee name — otherwise the second developer's
+        // workload would be invisible on the Сотрудники tab.
+        [r.name, r.secondName].forEach(assigneeName => {
+          if (!assigneeName || assigneeName === 'Не назначен') return;
+          if (!rawMap[assigneeName]) rawMap[assigneeName] = [];
+          r.tasks.forEach(t => {
+            rawMap[assigneeName].push({ project: p.name, role: r.role, task: t, projectId: p.id, resourceId: r.id, projectWeight: p.weight });
+          });
         });
       });
     });
@@ -3983,7 +4091,10 @@ export default function App() {
         ...p,
         resources: p.resources.map(r => {
           if (r.id !== resourceId) return r;
-          return { ...r, name: newName };
+          // Unassigning clears the whole row, not just the primary name —
+          // otherwise a Девелопмент row with a second developer (see
+          // secondName) would be left showing "Не назначен + <второй>".
+          return { ...r, name: newName, secondName: newName === 'Не назначен' ? undefined : r.secondName };
         })
       };
       syncProjectToServer(updated);
@@ -4058,17 +4169,15 @@ export default function App() {
     const computedReleaseYear = getProjectReleaseDate(projectData).getFullYear();
     const projectWithYear = { ...projectData, releaseYear: computedReleaseYear };
 
-    // Optimistic UI update
+    // Optimistic UI update — stays on whatever tab the modal was opened
+    // from; it used to jump to the project's release-year tab on every save,
+    // which was disorienting when editing/creating from a different tab.
     if (modalMode === 'edit') {
       setProjects(prev => prev.map(p => p.id === projectData.id ? projectWithYear : p));
-      if (!projectWithYear.isPrototype) {
-        setActiveTab(`projects_${computedReleaseYear}`);
-      }
     } else {
       const maxOrder = projects.reduce((max, p) => Math.max(max, p.sortOrder ?? -1), -1);
       const newProject = { ...projectWithYear, sortOrder: maxOrder + 1 };
       setProjects(prev => [...prev, newProject]);
-      setActiveTab(newProject.isPrototype ? 'prototypes' : `projects_${computedReleaseYear}`);
       // Update data to sync
       projectData = newProject;
     }
@@ -5316,7 +5425,7 @@ export default function App() {
                           className="w-28 bg-transparent border border-transparent hover:border-slate-200 focus:border-indigo-400 rounded px-1.5 py-1 outline-none transition-colors"
                         />
                       </td>
-                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{developer?.name && developer.name !== 'Не назначен' ? developer.name : '—'}</td>
+                      <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{developer?.name && developer.name !== 'Не назначен' ? getResourceDisplayName(developer) : '—'}</td>
                       <td className="px-3 py-2">
                         <select
                           value={project.devStatus || ''}
@@ -6183,7 +6292,7 @@ export default function App() {
                             />
                           </div>
                         </div>
-                        {sortedProjects.map((project, pIdx) => {
+                        {sortedProjects.map((project) => {
                           const isCollapsed = collapsedProjects[project.id];
                           const rowHeight = getProjectRowHeight(project, false);
                           
@@ -6203,9 +6312,7 @@ export default function App() {
                                 <div className="h-full flex items-center px-4 text-[10px] text-slate-400 font-medium italic select-none">
                                   Проект завершен
                                 </div>
-                              ) : project.resources.map((resource, rIdx) => {
-                                const isNearBottom = pIdx >= sortedProjects.length - 1 || (pIdx >= sortedProjects.length - 2 && rIdx >= project.resources.length - 3);
-                                
+                              ) : project.resources.map((resource) => {
                                 return (
                                   <div 
                                     key={resource.id} 
@@ -6216,7 +6323,7 @@ export default function App() {
                                         {resource.role}
                                       </div>
                                       <div className="text-xs font-medium text-slate-600 flex items-center gap-1.5 min-w-0">
-                                        <span className="truncate">{resource.name}</span>
+                                        <span className="truncate">{getResourceDisplayName(resource)}</span>
                                         {resource.name && resource.name !== 'Не назначен' && !resource.isSpecialRow && !isReadOnly && (
                                           <button
                                             onClick={(e) => {
@@ -6234,29 +6341,33 @@ export default function App() {
                                     
                                     {!resource.isSpecialRow && !isReadOnly && (
                                       <div className="relative">
-                                        <button 
+                                        <button
                                           onClick={(e) => {
                                             e.stopPropagation();
-                                            setReassigning(prev => 
-                                              prev?.resourceId === resource.id ? null : { projectId: project.id, resourceId: resource.id, role: resource.role }
-                                            );
+                                            if (reassigning?.resourceId === resource.id) {
+                                              closeReassignPopover();
+                                            } else {
+                                              setReassignAnchorRect(e.currentTarget.getBoundingClientRect());
+                                              setReassigning({ projectId: project.id, resourceId: resource.id, role: resource.role });
+                                            }
                                           }}
                                           className={`p-2 rounded-lg transition-all ${reassigning?.resourceId === resource.id ? 'bg-indigo-100 text-indigo-600' : 'text-slate-300 hover:text-indigo-600 hover:bg-indigo-50'}`}
                                         >
                                           <Users size={14} className="flex-shrink-0" />
                                         </button>
-    
-                                        {reassigning?.resourceId === resource.id && (
-                                          <div 
-                                            className={`absolute right-0 ${isNearBottom ? 'bottom-full mb-2' : 'top-full mt-2'} z-[60] bg-white border border-slate-200 shadow-2xl rounded-xl p-3 min-w-[240px]`}
+
+                                        {reassigning?.resourceId === resource.id && reassignPopoverPos && createPortal(
+                                          <div
+                                            className="fixed z-[100] bg-white border border-slate-200 shadow-2xl rounded-xl p-3 w-60"
+                                            style={{ top: reassignPopoverPos.top, left: reassignPopoverPos.left }}
                                             onClick={e => e.stopPropagation()}
                                           >
                                             <div className="text-[10px] font-bold text-indigo-600 uppercase mb-3 tracking-wider">Исполнитель для: {resource.role}</div>
                                             <div className="space-y-1 max-h-60 overflow-y-auto pr-1">
-                                              <button 
+                                              <button
                                                 onClick={() => {
                                                   handleQuickAssign(project.id, resource.id, 'Не назначен');
-                                                  setReassigning(null);
+                                                  closeReassignPopover();
                                                 }}
                                                 className="w-full text-left px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50 rounded-lg transition-colors border border-dashed border-slate-200 hover:border-slate-300 mb-2"
                                               >
@@ -6265,11 +6376,11 @@ export default function App() {
                                               {getFilteredUsers(resource.role).map(u => {
                                                 const isBusy = getUserConflict(u.name, project.id, resource.id);
                                                 return (
-                                                  <button 
+                                                  <button
                                                     key={u.id}
                                                     onClick={() => {
                                                       handleQuickAssign(project.id, resource.id, u.name);
-                                                      setReassigning(null);
+                                                      closeReassignPopover();
                                                     }}
                                                     className={`w-full flex items-center gap-3 p-2 text-left rounded-lg group/item transition-all ${
                                                       isBusy ? 'hover:bg-red-50 bg-red-50/10' : 'hover:bg-indigo-50'
@@ -6294,13 +6405,14 @@ export default function App() {
                                                 </div>
                                               )}
                                             </div>
-                                            <button 
-                                              onClick={() => setReassigning(null)}
+                                            <button
+                                              onClick={closeReassignPopover}
                                               className="w-full mt-3 pt-3 border-t border-slate-100 text-[10px] text-slate-400 hover:text-slate-600 font-bold uppercase tracking-widest transition-colors"
                                             >
                                               Отмена
                                             </button>
-                                          </div>
+                                          </div>,
+                                          document.body
                                         )}
                                       </div>
                                     )}
